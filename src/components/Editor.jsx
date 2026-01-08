@@ -4,7 +4,6 @@ import ReactMarkdown from 'react-markdown';
 import { getUsageStats, chatWithLLM } from '../services/huggingface';
 import { useAuth } from '../lib/auth';
 import { ModelSelector, useSelectedModel } from './ModelSelector';
-import { McpSelector, useSelectedMcp } from './McpSelector';
 import { saveManuscript, loadManuscript, getAllManuscripts } from '../lib/storage/manuscript-store';
 
 const API_BASE = import.meta.env.VITE_CLOUDFLARE_WORKER_URL || '';
@@ -25,9 +24,8 @@ export default function Editor() {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   
-  // Model and MCP selection
+  // Model selection
   const [selectedModel, setSelectedModel] = useSelectedModel();
-  const [selectedMcp, setSelectedMcp] = useSelectedMcp();
   
   const fileInputRef = useRef(null);
   const messagesEndRef = useRef(null);
@@ -356,11 +354,6 @@ export default function Editor() {
             {/* Model Selection */}
             <div className="mb-6">
               <ModelSelector value={selectedModel} onChange={setSelectedModel} />
-            </div>
-            
-            {/* MCP Selection */}
-            <div className="mb-6">
-              <McpSelector value={selectedMcp} onChange={setSelectedMcp} />
             </div>
             
             {/* API Key (fallback) */}

@@ -7,7 +7,6 @@
 
 const API_BASE = import.meta.env.VITE_CLOUDFLARE_WORKER_URL || '';
 const DEFAULT_MODEL = 'PleIAs/Pleias-1.2b-Preview';
-const DEFAULT_MCP = 'huggingface';
 
 /**
  * Get auth headers from local storage
@@ -34,13 +33,6 @@ function getSelectedModel() {
 }
 
 /**
- * Get selected MCP from localStorage
- */
-function getSelectedMcp() {
-  return localStorage.getItem('ethicalaiditor_mcp') || DEFAULT_MCP;
-}
-
-/**
  * Chat with LLM via Cloudflare Worker proxy
  * 
  * @param {Array} messages - Array of {role, content} message objects
@@ -50,7 +42,6 @@ function getSelectedMcp() {
  */
 export const chatWithLLM = async (messages, manuscriptContext = '', model = null) => {
   const selectedModel = model || getSelectedModel();
-  const selectedMcp = getSelectedMcp();
 
   // If no API configured, fall back to direct HuggingFace call (requires user's API key)
   if (!API_BASE) {
@@ -68,7 +59,6 @@ export const chatWithLLM = async (messages, manuscriptContext = '', model = null
       body: JSON.stringify({
         messages,
         model: selectedModel,
-        mcp: selectedMcp,
         manuscriptContext: manuscriptContext?.substring(0, 3000), // Limit context size
       }),
     });
@@ -190,4 +180,4 @@ export const getAvailableModels = async () => {
   }
 };
 
-export { DEFAULT_MODEL, DEFAULT_MCP };
+export { DEFAULT_MODEL };
