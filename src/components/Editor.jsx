@@ -1,8 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Upload, Send, Settings, FileText, MessageSquare, Save, User, LogOut, X, Loader2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
-import { useChat } from '@ai-sdk/react';
-import { getUsageStats } from '../services/huggingface';
+import { getUsageStats, chatWithLLM } from '../services/huggingface';
 import { useAuth } from '../lib/auth';
 import { ModelSelector, useSelectedModel } from './ModelSelector';
 import { McpSelector, useSelectedMcp } from './McpSelector';
@@ -21,6 +20,11 @@ export default function Editor() {
   const [apiKey, setApiKey] = useState(localStorage.getItem('hf_api_key') || '');
   const [chatError, setChatError] = useState(null);
   
+  // Chat state (managed locally instead of useChat to avoid errors when API not configured)
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  
   // Model and MCP selection
   const [selectedModel, setSelectedModel] = useSelectedModel();
   const [selectedMcp, setSelectedMcp] = useSelectedMcp();
@@ -28,55 +32,8 @@ export default function Editor() {
   const fileInputRef = useRef(null);
   const messagesEndRef = useRef(null);
 
-  // Get auth headers
-  const getAuthHeaders = useCallback(() => {
-    const token = localStorage.getItem('ethicalaiditor_auth_token');
-    const userId = localStorage.getItem('ethicalaiditor_user_id');
-    const headers = {};
-    if (token) headers['Authorization'] = `Bearer ${token}`;
-    if (userId) headers['X-User-Id'] = userId;
-    return headers;
-  }, []);
-
-  // Vercel AI SDK useChat hook with streaming
-  const { 
-    messages, 
-    input, 
-    setInput,
-    handleInputChange,
-    handleSubmit,
-    isLoading,
-    error,
-    append,
-    setMessages,
-  } = useChat({
-    api: `${API_BASE}/api/huggingface`,
-    streamProtocol: 'data',
-    headers: getAuthHeaders(),
-    body: {
-      model: selectedModel,
-      mcp: selectedMcp,
-      manuscriptContext: manuscript?.substring(0, 3000),
-      stream: true,
-    },
-    onError: (err) => {
-      console.error('Chat error:', err);
-      if (err.message?.includes('NetworkError') || err.message?.includes('Failed to fetch')) {
-        setChatError('Cannot reach the API server. The Cloudflare Worker may not be deployed yet.');
-      } else {
-        setChatError(err.message);
-      }
-    },
-    onFinish: () => {
-      setChatError(null);
-      // Refresh usage stats after call
-      if (isAuthenticated) {
-        getUsageStats().then(stats => {
-          if (stats) setUsageStats(stats);
-        });
-      }
-    },
-  });
+  // Generate unique ID for messages
+  const generateId = () => `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
   // Auto-scroll chat
   useEffect(() => {
@@ -122,10 +79,11 @@ export default function Editor() {
       reader.onload = (e) => {
         setManuscript(e.target.result);
         // Add a system message about the upload
-        append({ 
+        setMessages(prev => [...prev, { 
+          id: generateId(),
           role: 'assistant', 
           content: `File "${file.name}" uploaded. I can now see your manuscript and help you with it. What would you like to discuss?` 
-        });
+        }]);
       };
       reader.readAsText(file);
     }
@@ -136,12 +94,48 @@ export default function Editor() {
     setShowSettings(false);
   };
 
-  // Custom submit handler that clears errors
-  const onSubmit = (e) => {
+  // Handle sending messages
+  const onSubmit = async (e) => {
     e.preventDefault();
-    if (!input.trim() || !apiConfigured) return;
+    if (!input.trim()) return;
+    
+    const apiConfigured = API_BASE || apiKey;
+    if (!apiConfigured) {
+      setChatError('Please configure your HuggingFace API Key in settings, or wait for the API to be set up.');
+      return;
+    }
+
     setChatError(null);
-    handleSubmit(e);
+    const userMessage = { id: generateId(), role: 'user', content: input };
+    setMessages(prev => [...prev, userMessage]);
+    setInput('');
+    setIsLoading(true);
+
+    try {
+      const response = await chatWithLLM(
+        [...messages, userMessage].map(m => ({ role: m.role, content: m.content })),
+        manuscript,
+        selectedModel
+      );
+      
+      setMessages(prev => [...prev, { 
+        id: generateId(), 
+        role: 'assistant', 
+        content: response 
+      }]);
+      
+      // Refresh usage stats after call
+      if (isAuthenticated) {
+        getUsageStats().then(stats => {
+          if (stats) setUsageStats(stats);
+        });
+      }
+    } catch (error) {
+      console.error('Chat error:', error);
+      setChatError(error.message);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const apiConfigured = API_BASE || apiKey;
@@ -327,7 +321,7 @@ export default function Editor() {
               <input
                 type="text"
                 value={input}
-                onChange={handleInputChange}
+                onChange={(e) => setInput(e.target.value)}
                 placeholder="Ask about your text..."
                 className="flex-1 border border-gray-300 rounded-full px-4 py-2 text-sm focus:outline-none focus:border-blue-500"
                 disabled={!apiConfigured}
