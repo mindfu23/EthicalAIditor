@@ -1,11 +1,14 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Send, Settings, FileText, MessageSquare, Save, User, LogOut, X } from 'lucide-react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { Upload, Send, Settings, FileText, MessageSquare, Save, User, LogOut, X, Loader2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
-import { chatWithLLM, getUsageStats } from '../services/huggingface';
+import { useChat } from '@ai-sdk/react';
+import { getUsageStats } from '../services/huggingface';
 import { useAuth } from '../lib/auth';
 import { ModelSelector, useSelectedModel } from './ModelSelector';
 import { McpSelector, useSelectedMcp } from './McpSelector';
 import { saveManuscript, loadManuscript, getAllManuscripts } from '../lib/storage/manuscript-store';
+
+const API_BASE = import.meta.env.VITE_CLOUDFLARE_WORKER_URL || '';
 
 export default function Editor() {
   const { user, isAuthenticated, openAuth, logout } = useAuth();
@@ -13,12 +16,10 @@ export default function Editor() {
   const [manuscript, setManuscript] = useState('');
   const [fileName, setFileName] = useState('');
   const [manuscriptId, setManuscriptId] = useState(null);
-  const [messages, setMessages] = useState([]);
-  const [input, setInput] = useState('');
   const [showSettings, setShowSettings] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
   const [usageStats, setUsageStats] = useState(null);
   const [apiKey, setApiKey] = useState(localStorage.getItem('hf_api_key') || '');
+  const [chatError, setChatError] = useState(null);
   
   // Model and MCP selection
   const [selectedModel, setSelectedModel] = useSelectedModel();
@@ -26,6 +27,56 @@ export default function Editor() {
   
   const fileInputRef = useRef(null);
   const messagesEndRef = useRef(null);
+
+  // Get auth headers
+  const getAuthHeaders = useCallback(() => {
+    const token = localStorage.getItem('ethicalaiditor_auth_token');
+    const userId = localStorage.getItem('ethicalaiditor_user_id');
+    const headers = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    if (userId) headers['X-User-Id'] = userId;
+    return headers;
+  }, []);
+
+  // Vercel AI SDK useChat hook with streaming
+  const { 
+    messages, 
+    input, 
+    setInput,
+    handleInputChange,
+    handleSubmit,
+    isLoading,
+    error,
+    append,
+    setMessages,
+  } = useChat({
+    api: `${API_BASE}/api/huggingface`,
+    streamProtocol: 'data',
+    headers: getAuthHeaders(),
+    body: {
+      model: selectedModel,
+      mcp: selectedMcp,
+      manuscriptContext: manuscript?.substring(0, 3000),
+      stream: true,
+    },
+    onError: (err) => {
+      console.error('Chat error:', err);
+      if (err.message?.includes('NetworkError') || err.message?.includes('Failed to fetch')) {
+        setChatError('Cannot reach the API server. The Cloudflare Worker may not be deployed yet.');
+      } else {
+        setChatError(err.message);
+      }
+    },
+    onFinish: () => {
+      setChatError(null);
+      // Refresh usage stats after call
+      if (isAuthenticated) {
+        getUsageStats().then(stats => {
+          if (stats) setUsageStats(stats);
+        });
+      }
+    },
+  });
 
   // Auto-scroll chat
   useEffect(() => {
@@ -70,10 +121,11 @@ export default function Editor() {
       const reader = new FileReader();
       reader.onload = (e) => {
         setManuscript(e.target.result);
-        setMessages(prev => [...prev, { 
-          role: 'system', 
-          content: `File "${file.name}" uploaded. You can now ask questions about it.` 
-        }]);
+        // Add a system message about the upload
+        append({ 
+          role: 'assistant', 
+          content: `File "${file.name}" uploaded. I can now see your manuscript and help you with it. What would you like to discuss?` 
+        });
       };
       reader.readAsText(file);
     }
@@ -84,51 +136,43 @@ export default function Editor() {
     setShowSettings(false);
   };
 
-  const handleSendMessage = async (e) => {
+  // Custom submit handler that clears errors
+  const onSubmit = (e) => {
     e.preventDefault();
-    if (!input.trim()) return;
-
-    // Check if API is configured
-    const apiConfigured = import.meta.env.VITE_CLOUDFLARE_WORKER_URL || apiKey;
-    if (!apiConfigured) {
-      setMessages(prev => [...prev, { 
-        role: 'system', 
-        content: 'Please configure your HuggingFace API Key in settings, or wait for the API to be set up.' 
-      }]);
-      return;
-    }
-
-    const userMessage = { role: 'user', content: input };
-    setMessages(prev => [...prev, userMessage]);
-    setInput('');
-    setIsLoading(true);
-
-    try {
-      const response = await chatWithLLM(
-        [...messages, userMessage],
-        manuscript, // Pass manuscript as context
-        selectedModel
-      );
-      
-      setMessages(prev => [...prev, { role: 'assistant', content: response }]);
-      
-      // Refresh usage stats after call
-      if (isAuthenticated) {
-        getUsageStats().then(stats => {
-          if (stats) setUsageStats(stats);
-        });
-      }
-    } catch (error) {
-      setMessages(prev => [...prev, { role: 'system', content: `Error: ${error.message}` }]);
-    } finally {
-      setIsLoading(false);
-    }
+    if (!input.trim() || !apiConfigured) return;
+    setChatError(null);
+    handleSubmit(e);
   };
 
-  const apiConfigured = import.meta.env.VITE_CLOUDFLARE_WORKER_URL || apiKey;
+  const apiConfigured = API_BASE || apiKey;
 
   return (
-    <div className="flex h-screen bg-gray-100 overflow-hidden">
+    <div className="flex flex-col h-screen bg-gray-100 overflow-hidden">
+      {/* Header with App Info */}
+      <header className="bg-white border-b border-gray-200 px-6 py-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-xl font-bold text-gray-900">Ethical AIditor</h1>
+            <p className="text-xs text-gray-600 mt-0.5">
+              Powered by{' '}
+              <a 
+                href="https://huggingface.co/collections/PleIAs/common-corpus-65d46e3ea3980fdcd66a5613" 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="text-blue-600 hover:underline"
+              >
+                Common Corpus
+              </a>
+              {' '}— an LLM trained exclusively on legally permissible data.
+            </p>
+          </div>
+          <p className="text-xs text-gray-500 max-w-xs text-right">
+            🔒 Your writings are saved locally only. No data is used to train models or for any other purpose.
+          </p>
+        </div>
+      </header>
+
+      <div className="flex flex-1 overflow-hidden">
       {/* Sidebar / Navigation */}
       <div className="w-16 bg-gray-900 flex flex-col items-center py-4 space-y-4 text-white">
         <div className="p-2 bg-blue-600 rounded-lg">
@@ -219,11 +263,14 @@ export default function Editor() {
 
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
             {messages.length === 0 && (
-              <div className="text-center text-gray-500 mt-10">
-                <p>Upload a manuscript and start discussing it with the AI.</p>
+              <div className="text-center text-gray-500 mt-10 space-y-3">
+                <p className="font-medium">Paste or type your text in the left panel, then ask questions here.</p>
+                <p className="text-sm text-gray-400">
+                  The AI can see your manuscript automatically — no need to submit it first.
+                </p>
                 {!apiConfigured && (
                   <p className="text-red-500 text-sm mt-2">
-                    Please configure your HuggingFace API Key in settings.
+                    ⚠️ API not configured. Please set up the Cloudflare Worker (see DEPLOYMENT.md).
                   </p>
                 )}
                 {!isAuthenticated && apiConfigured && (
@@ -236,9 +283,17 @@ export default function Editor() {
                 )}
               </div>
             )}
-            {messages.map((msg, idx) => (
+            
+            {/* Display chat error if any */}
+            {chatError && (
+              <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">
+                {chatError}
+              </div>
+            )}
+            
+            {messages.map((msg) => (
               <div 
-                key={idx} 
+                key={msg.id} 
                 className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
               >
                 <div 
@@ -254,10 +309,13 @@ export default function Editor() {
                 </div>
               </div>
             ))}
+            
+            {/* Streaming indicator */}
             {isLoading && (
               <div className="flex justify-start">
-                <div className="bg-white border border-gray-200 rounded-lg p-3 text-sm text-gray-500">
-                  Thinking...
+                <div className="bg-white border border-gray-200 rounded-lg p-3 text-sm text-gray-500 flex items-center gap-2">
+                  <Loader2 size={14} className="animate-spin" />
+                  <span>Writing...</span>
                 </div>
               </div>
             )}
@@ -265,11 +323,11 @@ export default function Editor() {
           </div>
 
           <div className="p-4 border-t border-gray-200 bg-white">
-            <form onSubmit={handleSendMessage} className="flex items-center space-x-2">
+            <form onSubmit={onSubmit} className="flex items-center space-x-2">
               <input
                 type="text"
                 value={input}
-                onChange={(e) => setInput(e.target.value)}
+                onChange={handleInputChange}
                 placeholder="Ask about your text..."
                 className="flex-1 border border-gray-300 rounded-full px-4 py-2 text-sm focus:outline-none focus:border-blue-500"
                 disabled={!apiConfigured}
@@ -284,6 +342,7 @@ export default function Editor() {
             </form>
           </div>
         </div>
+      </div>
       </div>
 
       {/* Settings Modal */}

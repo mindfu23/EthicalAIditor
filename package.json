@@ -32,6 +32,8 @@
   },
   "homepage": "https://github.com/mindfu23/EthicalAIditor#readme",
   "dependencies": {
+    "@ai-sdk/react": "^3.0.23",
+    "ai": "^6.0.23",
     "clsx": "^2.1.1",
     "lucide-react": "^0.562.0",
     "react": "^19.2.3",

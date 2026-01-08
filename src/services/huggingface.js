@@ -88,6 +88,12 @@ export const chatWithLLM = async (messages, manuscriptContext = '', model = null
     return result.text || '';
   } catch (error) {
     console.error('Error calling API:', error);
+    
+    // Provide clearer error messages for common issues
+    if (error.message?.includes('NetworkError') || error.message?.includes('Failed to fetch')) {
+      throw new Error('Cannot reach the API server. The Cloudflare Worker may not be deployed yet. Check DEPLOYMENT.md for setup instructions.');
+    }
+    
     throw error;
   }
 };

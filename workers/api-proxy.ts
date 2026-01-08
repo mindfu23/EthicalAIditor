@@ -160,13 +160,6 @@ async function handleHuggingFaceRequest(request: Request, env: Env, ctx: Executi
   
   const rateLimit = await checkRateLimit(env, user.id, user.tier);
   // Rate limiting disabled - just track usage
-  // if (!rateLimit.allowed) {
-  //   return json({ 
-  //     error: 'Rate limit exceeded. Sign up for more requests or upgrade to premium.',
-  //     remaining: 0, 
-  //     limit: rateLimit.limit 
-  //   }, 429);
-  // }
 
   const startTime = Date.now();
   
@@ -176,6 +169,7 @@ async function handleHuggingFaceRequest(request: Request, env: Env, ctx: Executi
       model?: string;
       mcp?: string;
       manuscriptContext?: string;
+      stream?: boolean;
     };
 
     const model = body.model && AVAILABLE_MODELS[body.model as keyof typeof AVAILABLE_MODELS] 
@@ -198,7 +192,12 @@ async function handleHuggingFaceRequest(request: Request, env: Env, ctx: Executi
     
     const fullPrompt = `${systemPrompt}\n\n${formattedMessages}`;
 
-    // Call HuggingFace Inference API
+    // If streaming is requested, use the streaming endpoint
+    if (body.stream) {
+      return handleStreamingRequest(env, ctx, user, model, modelConfig, fullPrompt, rateLimit, startTime);
+    }
+
+    // Non-streaming response (original behavior)
     const response = await fetch(`https://api-inference.huggingface.co/models/${model}`, {
       method: 'POST',
       headers: {
@@ -242,6 +241,143 @@ async function handleHuggingFaceRequest(request: Request, env: Env, ctx: Executi
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     ctx.waitUntil(logApiUsage(env, user.id, 'unknown', Date.now() - startTime, false, 0, errorMessage));
     return json({ error: errorMessage }, 500);
+  }
+}
+
+// Streaming handler for Vercel AI SDK compatibility
+async function handleStreamingRequest(
+  env: Env,
+  ctx: ExecutionContext,
+  user: { id: string; tier: string },
+  model: string,
+  modelConfig: { maxTokens: number },
+  fullPrompt: string,
+  rateLimit: { remaining: number; limit: number; used: number },
+  startTime: number
+): Promise<Response> {
+  try {
+    // HuggingFace streaming API
+    const response = await fetch(`https://api-inference.huggingface.co/models/${model}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${env.HUGGINGFACE_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        inputs: fullPrompt,
+        parameters: {
+          max_new_tokens: modelConfig.maxTokens,
+          temperature: 0.7,
+          return_full_text: false,
+        },
+        stream: true,
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json() as { error?: string };
+      throw new Error(error.error || `HuggingFace API error: ${response.status}`);
+    }
+
+    // Check if HuggingFace returned streaming response
+    const contentType = response.headers.get('content-type') || '';
+    
+    if (contentType.includes('text/event-stream') && response.body) {
+      // Transform HuggingFace SSE to Vercel AI SDK format
+      const transformStream = new TransformStream({
+        async transform(chunk, controller) {
+          const text = new TextDecoder().decode(chunk);
+          const lines = text.split('\n').filter(line => line.trim());
+          
+          for (const line of lines) {
+            if (line.startsWith('data:')) {
+              const data = line.slice(5).trim();
+              if (data === '[DONE]') {
+                controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
+              } else {
+                try {
+                  const parsed = JSON.parse(data);
+                  const token = parsed.token?.text || parsed.generated_text || '';
+                  if (token) {
+                    // Vercel AI SDK format: data: {"type":"text","value":"..."}\n\n
+                    const aiSdkChunk = JSON.stringify({ type: 'text-delta', textDelta: token });
+                    controller.enqueue(new TextEncoder().encode(`data: ${aiSdkChunk}\n\n`));
+                  }
+                } catch {
+                  // Skip unparseable lines
+                }
+              }
+            }
+          }
+        },
+      });
+
+      const streamedResponse = response.body.pipeThrough(transformStream);
+      
+      ctx.waitUntil(logApiUsage(env, user.id, model, Date.now() - startTime, true, fullPrompt.length));
+
+      return new Response(streamedResponse, {
+        headers: {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+          ...corsHeaders,
+        },
+      });
+    }
+
+    // Fallback: HuggingFace didn't stream, simulate streaming from full response
+    const result = await response.json() as Array<{ generated_text: string }>;
+    const generatedText = result[0]?.generated_text || '';
+    
+    ctx.waitUntil(logApiUsage(env, user.id, model, Date.now() - startTime, true, fullPrompt.length + generatedText.length));
+
+    // Create a simulated stream that sends the full text in chunks
+    const encoder = new TextEncoder();
+    const words = generatedText.split(' ');
+    
+    const stream = new ReadableStream({
+      async start(controller) {
+        for (let i = 0; i < words.length; i++) {
+          const word = words[i] + (i < words.length - 1 ? ' ' : '');
+          const chunk = JSON.stringify({ type: 'text-delta', textDelta: word });
+          controller.enqueue(encoder.encode(`data: ${chunk}\n\n`));
+          // Small delay to simulate streaming
+          await new Promise(resolve => setTimeout(resolve, 20));
+        }
+        controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+        controller.close();
+      },
+    });
+
+    return new Response(stream, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        ...corsHeaders,
+      },
+    });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    ctx.waitUntil(logApiUsage(env, user.id, model, Date.now() - startTime, false, 0, errorMessage));
+    
+    // Return error as SSE
+    const encoder = new TextEncoder();
+    const errorStream = new ReadableStream({
+      start(controller) {
+        const errorChunk = JSON.stringify({ type: 'error', error: errorMessage });
+        controller.enqueue(encoder.encode(`data: ${errorChunk}\n\n`));
+        controller.close();
+      },
+    });
+    
+    return new Response(errorStream, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        ...corsHeaders,
+      },
+    });
   }
 }
 
