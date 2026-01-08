@@ -1,23 +1,14 @@
-import React, { useState } from 'react';
-import Auth from './components/Auth';
+import React from 'react';
+import { AuthProvider, AuthModal } from './lib/auth';
 import Editor from './components/Editor';
 
 function App() {
-  const [user, setUser] = useState(null);
-
-  const handleLogin = (userData) => {
-    setUser(userData);
-  };
-
-  const handleLogout = () => {
-    setUser(null);
-  };
-
-  if (!user) {
-    return <Auth onLogin={handleLogin} />;
-  }
-
-  return <Editor user={user} onLogout={handleLogout} />;
+  return (
+    <AuthProvider>
+      <Editor />
+      <AuthModal />
+    </AuthProvider>
+  );
 }
 
 export default App;

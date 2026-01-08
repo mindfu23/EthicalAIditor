@@ -1,0 +1,23 @@
+# Cloudflare Worker configuration for EthicalAIditor
+# API proxy with auth, rate limiting, and HuggingFace integration
+
+name = "ethicalaiditor-api"
+main = "workers/api-proxy.ts"
+compatibility_date = "2024-01-01"
+
+# D1 Database binding
+[[d1_databases]]
+binding = "DB"
+database_name = "ethicalaiditor-db"
+database_id = "0b5f486e-728d-4ba8-88d3-013feeefc064" # Run: wrangler d1 create ethicalaiditor-db
+
+# Environment variables (set via: wrangler secret put HUGGINGFACE_API_KEY)
+# HUGGINGFACE_API_KEY - Required for AI model inference
+
+[vars]
+ENVIRONMENT = "production"
+
+# Development settings
+[dev]
+port = 8787
+local_protocol = "http"
