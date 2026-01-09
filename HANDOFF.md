@@ -6,11 +6,22 @@
 |-----------|--------|-----|
 | ✅ Cloud Run LLM API | Working | https://llm-api-1097587800570.us-central1.run.app |
 | ✅ Cloudflare Worker | Working | https://ethicalaiditor-api.valueape.workers.dev |
-| ✅ Netlify Frontend | Deployed | (check Netlify dashboard for URL) |
+| ✅ Netlify Frontend | Deployed | https://ethicalaiditor.netlify.app |
 | ✅ Chat Feature | Fixed | Endpoint mismatch resolved |
+| ✅ Warmup Feature | Added | Pre-warms service on page load |
 
-## Latest Fix (January 9, 2026)
+## Latest Updates (January 9, 2026)
 
+### Warmup Feature Added
+- **src/services/warmup.js** - New service that pings the API on page load
+- **src/components/Editor.jsx** - Added status indicators showing:
+  - "Checking AI service..." (blue) - Initial check
+  - "AI Model Warming Up..." (amber) - Cold start in progress
+  - "AI service is ready!" (green) - Ready to chat
+  - "Service unavailable" (red) - Error with retry button
+- Frontend now warms up Cloud Run before user tries to chat
+
+### Previous Fix: Endpoint Mismatch
 **Issue:** Chat feature was returning `{"error":"Not found"}` because the frontend was calling `/api/huggingface` but the worker only handled `/api/generate` and `/api/chat`.
 
 **Solution:** Updated `worker/index.js` to add:
@@ -18,15 +29,16 @@
 - `/api/models` - Returns available PleIAs models
 - `/api/usage` - Returns usage statistics
 
-**Deployed:** Worker version `0ec2d235-e9e2-471c-b475-0ed8dd78e349`
-
 ## Note on Cold Starts
 
-The Cloud Run LLM API uses lazy model loading. First request after cold start may timeout (524 error) while the model loads (~30-60 seconds). Subsequent requests are fast.
+The Cloud Run LLM API uses lazy model loading. First request after cold start may timeout (~30-60 seconds) while the model loads. The new warmup feature handles this by:
+1. Sending a warmup ping immediately on page load
+2. Showing status to user so they know to wait
+3. Automatically retrying if initial warmup fails
 
 ## Current Issue
 
-None - chat feature should now be working. Test it at the Netlify frontend URL.
+None - all features working. Test at https://ethicalaiditor.netlify.app
 
 ### To Debug
 ```bash
