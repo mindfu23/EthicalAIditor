@@ -1,10 +1,11 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Upload, Send, Settings, FileText, MessageSquare, Save, User, LogOut, X, Loader2 } from 'lucide-react';
+import { Upload, Send, Settings, FileText, MessageSquare, Save, User, LogOut, X, Loader2, Zap, CheckCircle, AlertCircle } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { getUsageStats, chatWithLLM } from '../services/huggingface';
 import { useAuth } from '../lib/auth';
 import { ModelSelector, useSelectedModel } from './ModelSelector';
 import { saveManuscript, loadManuscript, getAllManuscripts } from '../lib/storage/manuscript-store';
+import { initWarmup, subscribeToStatus, ServiceStatus, warmupService } from '../services/warmup';
 
 const API_BASE = import.meta.env.VITE_CLOUDFLARE_WORKER_URL || '';
 
@@ -27,11 +28,21 @@ export default function Editor() {
   // Model selection
   const [selectedModel, setSelectedModel] = useSelectedModel();
   
+  // Service status for warmup indicator
+  const [serviceStatus, setServiceStatus] = useState(ServiceStatus.UNKNOWN);
+  
   const fileInputRef = useRef(null);
   const messagesEndRef = useRef(null);
 
   // Generate unique ID for messages
   const generateId = () => `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+  // Initialize warmup on mount and subscribe to status
+  useEffect(() => {
+    initWarmup();
+    const unsubscribe = subscribeToStatus(setServiceStatus);
+    return unsubscribe;
+  }, []);
 
   // Auto-scroll chat
   useEffect(() => {
@@ -245,6 +256,62 @@ export default function Editor() {
           </div>
 
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            {/* Service Status Indicator */}
+            {serviceStatus !== ServiceStatus.READY && serviceStatus !== ServiceStatus.UNKNOWN && (
+              <div className={`rounded-lg p-3 text-sm flex items-center gap-3 ${
+                serviceStatus === ServiceStatus.CHECKING 
+                  ? 'bg-blue-50 border border-blue-200 text-blue-700'
+                  : serviceStatus === ServiceStatus.WARMING_UP
+                  ? 'bg-amber-50 border border-amber-300 text-amber-800'
+                  : 'bg-red-50 border border-red-200 text-red-700'
+              }`}>
+                {serviceStatus === ServiceStatus.CHECKING && (
+                  <>
+                    <Loader2 size={16} className="animate-spin flex-shrink-0" />
+                    <div>
+                      <p className="font-medium">Checking AI service...</p>
+                    </div>
+                  </>
+                )}
+                {serviceStatus === ServiceStatus.WARMING_UP && (
+                  <>
+                    <Zap size={16} className="flex-shrink-0 animate-pulse" />
+                    <div>
+                      <p className="font-medium">🚀 AI Model Warming Up...</p>
+                      <p className="text-xs mt-0.5 opacity-80">
+                        First request of the day takes 30-60 seconds. Please wait...
+                      </p>
+                    </div>
+                  </>
+                )}
+                {serviceStatus === ServiceStatus.ERROR && (
+                  <>
+                    <AlertCircle size={16} className="flex-shrink-0" />
+                    <div>
+                      <p className="font-medium">Service unavailable</p>
+                      <p className="text-xs mt-0.5 opacity-80">
+                        The AI service may be starting up.{' '}
+                        <button 
+                          onClick={() => warmupService()} 
+                          className="underline font-medium"
+                        >
+                          Retry
+                        </button>
+                      </p>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+            
+            {/* Service Ready Indicator (shows briefly then fades) */}
+            {serviceStatus === ServiceStatus.READY && messages.length === 0 && (
+              <div className="bg-green-50 border border-green-200 rounded-lg p-3 text-sm text-green-700 flex items-center gap-2">
+                <CheckCircle size={16} className="flex-shrink-0" />
+                <span>AI service is ready! Ask a question about your text.</span>
+              </div>
+            )}
+            
             {messages.length === 0 && (
               <div className="text-center text-gray-500 mt-10 space-y-3">
                 <p className="font-medium">Paste or type your text in the left panel, then ask questions here.</p>
@@ -296,9 +363,16 @@ export default function Editor() {
             {/* Streaming indicator */}
             {isLoading && (
               <div className="flex justify-start">
-                <div className="bg-white border border-gray-200 rounded-lg p-3 text-sm text-gray-500 flex items-center gap-2">
-                  <Loader2 size={14} className="animate-spin" />
-                  <span>Writing...</span>
+                <div className="bg-white border border-gray-200 rounded-lg p-3 text-sm text-gray-500">
+                  <div className="flex items-center gap-2">
+                    <Loader2 size={14} className="animate-spin" />
+                    <span>Thinking...</span>
+                  </div>
+                  {serviceStatus === ServiceStatus.WARMING_UP && (
+                    <p className="text-xs text-amber-600 mt-2">
+                      ⏳ AI is still warming up, this may take up to 60 seconds...
+                    </p>
+                  )}
                 </div>
               </div>
             )}
