@@ -1,14 +1,56 @@
 # EthicalAIditor - Agent Handoff Document
 
-## Current Status
+## Current Status (January 9, 2026)
 
 | Component | Status | URL |
 |-----------|--------|-----|
-| ✅ Cloud Run LLM API | Working | https://llm-api-1097587800570.us-central1.run.app |
+| ⚠️ Cloud Run LLM API | Cold Start Issues | https://llm-api-1097587800570.us-central1.run.app |
 | ✅ Cloudflare Worker | Working | https://ethicalaiditor-api.valueape.workers.dev |
 | ✅ Netlify Frontend | Deployed | https://ethicalaiditor.netlify.app |
-| ✅ Chat Feature | Fixed | Endpoint mismatch resolved |
-| ✅ Warmup Feature | Added | Pre-warms service on page load |
+| ⚠️ Chat Feature | Timeout on Cold Start | Needs testing after warmup |
+
+## NEXT STEPS (Resume Here)
+
+### Immediate Action Required
+The Cloud Run service needs to be warmed up before testing. Run this command and wait up to 2 minutes:
+
+```bash
+curl -s -X POST https://llm-api-1097587800570.us-central1.run.app/chat \
+  -H "Content-Type: application/json" \
+  -d '{"messages":[{"role":"user","content":"hello"}]}' --max-time 180
+```
+
+Once you get a response, test the app at https://ethicalaiditor.netlify.app
+
+### Root Cause
+- Cloud Run scales to zero when idle to save costs
+- Model loading takes 60-90 seconds on cold start
+- Cloudflare Worker has 30-second subrequest timeout limit
+- This caused "Internal server error" when warmup succeeded but chat failed
+
+### Recent Fix (needs testing)
+Changed architecture to bypass Cloudflare Worker timeout:
+1. **Frontend now calls Cloud Run directly** (no 30s timeout limit)
+2. **Added `/chat` endpoint to Cloud Run** (`llm-api/app.py`)
+3. **Added CORS support** (`flask-cors`) to Cloud Run
+4. **Updated warmup service** to ping Cloud Run directly
+
+### Files Changed
+- `llm-api/app.py` - Added `/chat` endpoint and CORS
+- `llm-api/requirements.txt` - Added `flask-cors`
+- `src/services/huggingface.js` - Calls Cloud Run directly, falls back to worker
+- `src/services/warmup.js` - Pings Cloud Run directly
+
+### If Chat Still Fails After Warmup
+1. Check browser console for errors
+2. Verify CORS is working: `curl -I -X OPTIONS https://llm-api-1097587800570.us-central1.run.app/chat`
+3. Test Cloud Run directly: `curl -X POST https://llm-api-1097587800570.us-central1.run.app/chat -H "Content-Type: application/json" -d '{"messages":[{"role":"user","content":"test"}]}'`
+
+### Long-term Solutions (Optional)
+1. **Set Cloud Run min instances to 1** (~$15-25/month): `gcloud run services update llm-api --min-instances=1 --region=us-central1`
+2. **Use a scheduled ping** to keep service warm (free but less reliable)
+
+---
 
 ## Latest Updates (January 9, 2026)
 
