@@ -1,11 +1,13 @@
 /**
  * HuggingFace Service for EthicalAIditor
  * 
- * Calls the Cloudflare Worker proxy for secure API access.
+ * Calls Cloud Run directly for LLM requests (bypasses Cloudflare Worker timeout limits).
+ * Falls back to worker or direct HuggingFace API if needed.
  * Supports PleIAs ethical AI models trained on Common Corpus.
  */
 
 const API_BASE = import.meta.env.VITE_CLOUDFLARE_WORKER_URL || '';
+const CLOUD_RUN_URL = 'https://llm-api-1097587800570.us-central1.run.app';
 const DEFAULT_MODEL = 'PleIAs/Pleias-1.2b-Preview';
 
 /**
@@ -44,7 +46,7 @@ export const chatWithLLM = async (messages, manuscriptContext = '', model = null
   const selectedModel = model || getSelectedModel();
 
   // If no API configured, fall back to direct HuggingFace call (requires user's API key)
-  if (!API_BASE) {
+  if (!API_BASE && !CLOUD_RUN_URL) {
     const apiKey = localStorage.getItem('hf_api_key');
     if (!apiKey) {
       throw new Error('Please configure the Cloudflare Worker URL or provide a HuggingFace API key in settings.');
@@ -52,36 +54,60 @@ export const chatWithLLM = async (messages, manuscriptContext = '', model = null
     return directHuggingFaceCall(messages, selectedModel, apiKey, manuscriptContext);
   }
 
+  // Try Cloud Run directly first (no timeout limits)
   try {
-    const response = await fetch(`${API_BASE}/api/huggingface`, {
+    console.log('[Chat] Calling Cloud Run directly...');
+    const response = await fetch(`${CLOUD_RUN_URL}/chat`, {
       method: 'POST',
-      headers: getAuthHeaders(),
+      headers: {
+        'Content-Type': 'application/json',
+      },
       body: JSON.stringify({
         messages,
         model: selectedModel,
-        manuscriptContext: manuscriptContext?.substring(0, 3000), // Limit context size
+        manuscriptContext: manuscriptContext?.substring(0, 3000),
       }),
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      
-      // Handle rate limiting
-      if (response.status === 429) {
-        throw new Error(`Rate limit exceeded. ${error.error || 'Please sign up for more requests or wait until tomorrow.'}`);
-      }
-      
-      throw new Error(error.error || `API error: ${response.status}`);
+      const error = await response.json().catch(() => ({}));
+      console.error('[Chat] Cloud Run error:', error);
+      throw new Error(error.error || `Cloud Run error: ${response.status}`);
     }
 
     const result = await response.json();
+    console.log('[Chat] Cloud Run response received');
     return result.text || '';
   } catch (error) {
-    console.error('Error calling API:', error);
+    console.error('[Chat] Cloud Run failed, trying worker fallback:', error);
     
-    // Provide clearer error messages for common issues
-    if (error.message?.includes('NetworkError') || error.message?.includes('Failed to fetch')) {
-      throw new Error('Cannot reach the API server. The Cloudflare Worker may not be deployed yet. Check DEPLOYMENT.md for setup instructions.');
+    // Fall back to Cloudflare Worker if Cloud Run fails
+    if (API_BASE) {
+      try {
+        const response = await fetch(`${API_BASE}/api/huggingface`, {
+          method: 'POST',
+          headers: getAuthHeaders(),
+          body: JSON.stringify({
+            messages,
+            model: selectedModel,
+            manuscriptContext: manuscriptContext?.substring(0, 3000),
+          }),
+        });
+
+        if (!response.ok) {
+          const err = await response.json();
+          if (response.status === 429) {
+            throw new Error(`Rate limit exceeded. ${err.error || 'Please sign up for more requests or wait until tomorrow.'}`);
+          }
+          throw new Error(err.error || `API error: ${response.status}`);
+        }
+
+        const result = await response.json();
+        return result.text || '';
+      } catch (workerError) {
+        console.error('[Chat] Worker fallback also failed:', workerError);
+        throw workerError;
+      }
     }
     
     throw error;

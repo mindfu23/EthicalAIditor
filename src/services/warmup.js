@@ -6,6 +6,7 @@
  */
 
 const API_BASE = import.meta.env.VITE_CLOUDFLARE_WORKER_URL || '';
+const CLOUD_RUN_URL = 'https://llm-api-1097587800570.us-central1.run.app';
 
 // Service status states
 export const ServiceStatus = {
@@ -54,41 +55,45 @@ export function getStatus() {
  * Returns true if service is ready, false otherwise
  */
 export async function warmupService() {
-  if (!API_BASE) {
-    console.log('[Warmup] No API_BASE configured, skipping warmup');
-    setStatus(ServiceStatus.ERROR);
-    return false;
-  }
-
   setStatus(ServiceStatus.CHECKING);
-  console.log('[Warmup] Checking service status...');
+  console.log('[Warmup] Checking Cloud Run service status...');
 
   try {
-    // First, ping the worker health endpoint (should be instant)
-    const workerResponse = await fetch(`${API_BASE}/api/health`, {
+    // First check Cloud Run health (this is fast even when cold)
+    const healthResponse = await fetch(`${CLOUD_RUN_URL}/health`, {
       method: 'GET',
       headers: { 'Content-Type': 'application/json' }
     });
 
-    if (!workerResponse.ok) {
-      console.error('[Warmup] Worker health check failed');
+    if (!healthResponse.ok) {
+      console.error('[Warmup] Cloud Run health check failed');
       setStatus(ServiceStatus.ERROR);
       return false;
     }
 
-    console.log('[Warmup] Worker is healthy, warming up LLM service...');
+    const healthData = await healthResponse.json();
+    console.log('[Warmup] Cloud Run health:', healthData);
+
+    // If model is already loaded, we're ready!
+    if (healthData.model_loaded) {
+      console.log('[Warmup] Model already loaded, service is ready');
+      setStatus(ServiceStatus.READY);
+      return true;
+    }
+
+    // Model not loaded yet, need to warm up
+    console.log('[Warmup] Model not loaded, warming up LLM service...');
     setStatus(ServiceStatus.WARMING_UP);
 
-    // Now send a minimal request to warm up the Cloud Run LLM service
-    // This will trigger model loading if the service is cold
+    // Send a minimal request to Cloud Run directly to trigger model loading
+    // This bypasses the Cloudflare Worker timeout limit
     const warmupStart = Date.now();
     
-    const llmResponse = await fetch(`${API_BASE}/api/huggingface`, {
+    const llmResponse = await fetch(`${CLOUD_RUN_URL}/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         messages: [{ role: 'user', content: 'hi' }],
-        // No manuscript context needed for warmup
       })
     });
 

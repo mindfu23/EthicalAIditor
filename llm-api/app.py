@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from huggingface_hub import login
 import torch
@@ -15,6 +16,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+# Enable CORS for all routes
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 # Model configuration
 MODEL_NAME = "PleIAs/Pleias-350m-Preview"
@@ -135,6 +138,66 @@ def generate_text():
             'details': str(e)
         }), 500
 
+@app.route('/chat', methods=['POST', 'OPTIONS'])
+def chat():
+    """Chat endpoint - converts messages to prompt and generates response"""
+    if request.method == 'OPTIONS':
+        return '', 204
+    
+    try:
+        current_model, current_tokenizer = get_model()
+        
+        data = request.get_json()
+        messages = data.get('messages', [])
+        manuscript_context = data.get('manuscriptContext', '')
+        
+        # Build system prompt
+        system_prompt = 'You are an ethical AI writing assistant trained on legally licensed materials.'
+        if manuscript_context:
+            system_prompt += f'\n\nManuscript context:\n{manuscript_context[:2000]}'
+        
+        # Convert messages to prompt format
+        message_prompt = '\n'.join([
+            f"{'[INST]' if m.get('role') == 'user' else ''} {m.get('content', '')} {'[/INST]' if m.get('role') == 'user' else ''}"
+            for m in messages
+        ])
+        
+        full_prompt = f"{system_prompt}\n\n{message_prompt}"
+        
+        logger.info(f"Chat request, prompt length: {len(full_prompt)}")
+        
+        # Tokenize input
+        inputs = current_tokenizer(full_prompt, return_tensors="pt")
+        
+        # Generate
+        with torch.no_grad():
+            outputs = current_model.generate(
+                inputs.input_ids,
+                max_length=500,
+                temperature=0.7,
+                do_sample=True,
+                pad_token_id=current_tokenizer.eos_token_id
+            )
+        
+        # Decode output
+        generated_text = current_tokenizer.decode(outputs[0], skip_special_tokens=True)
+        
+        # Remove the prompt from the response if included
+        if generated_text.startswith(full_prompt):
+            generated_text = generated_text[len(full_prompt):].strip()
+        
+        return jsonify({
+            'text': generated_text,
+            'model': MODEL_NAME
+        })
+    
+    except Exception as e:
+        logger.error(f"Error in chat: {str(e)}")
+        return jsonify({
+            'error': 'Internal server error',
+            'details': str(e)
+        }), 500
+
 @app.route('/', methods=['GET'])
 def root():
     """Root endpoint with API information"""
@@ -144,7 +207,8 @@ def root():
         'endpoints': {
             'health': '/health',
             'debug': '/debug/env',
-            'generate': '/generate (POST)'
+            'generate': '/generate (POST)',
+            'chat': '/chat (POST)'
         }
     })
 
