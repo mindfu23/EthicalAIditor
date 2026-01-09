@@ -72,17 +72,44 @@ export default {
         console.log('HuggingFace endpoint - proxying to Cloud Run');
         console.log('Prompt length:', fullPrompt.length);
         
-        const llmResponse = await fetch(`${llmApiUrl}/generate`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            prompt: fullPrompt,
-            max_length: 500,
-            temperature: 0.7
-          })
-        });
+        let llmResponse;
+        try {
+          llmResponse = await fetch(`${llmApiUrl}/generate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              prompt: fullPrompt,
+              max_length: 500,
+              temperature: 0.7
+            })
+          });
+        } catch (fetchError) {
+          console.error('Fetch error:', fetchError);
+          // This often happens when Cloud Run is cold starting
+          return new Response(JSON.stringify({ 
+            error: 'The AI service is warming up. Please wait 30-60 seconds and try again.',
+            details: 'Cloud Run cold start timeout'
+          }), {
+            status: 503,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
         
-        const data = await llmResponse.json();
+        let data;
+        try {
+          data = await llmResponse.json();
+        } catch (jsonError) {
+          console.error('JSON parse error:', jsonError);
+          const text = await llmResponse.text();
+          console.error('Response text:', text);
+          return new Response(JSON.stringify({ 
+            error: 'Invalid response from AI service. It may be warming up.',
+            details: text.substring(0, 100)
+          }), {
+            status: 502,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
         
         if (!llmResponse.ok) {
           console.error('Cloud Run error:', data);
@@ -107,7 +134,10 @@ export default {
         });
       } catch (error) {
         console.error('HuggingFace endpoint error:', error);
-        return new Response(JSON.stringify({ error: error.message }), {
+        return new Response(JSON.stringify({ 
+          error: error.message || 'Internal server error',
+          hint: 'If this persists, the AI service may be starting up. Please try again in 30 seconds.'
+        }), {
           status: 500,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         });
