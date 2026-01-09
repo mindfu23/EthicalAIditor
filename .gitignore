@@ -1,6 +1,40 @@
-node_modules
-dist
-.DS_Store
+# Dependencies
+node_modules/
+venv/
+.venv/
+llm-api/venv/
+llm-api/.venv/
+
+# Build output
+dist/
+build/
+
+# Environment files
 .env
 .env.local
-TODO.md
+.env.*.local
+llm-api/.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Cache
+.cache/
+.netlify/

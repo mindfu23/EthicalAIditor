@@ -1,0 +1,153 @@
+import os
+import logging
+from dotenv import load_dotenv
+
+# Load .env file (for local development)
+load_dotenv()
+
+from flask import Flask, request, jsonify
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from huggingface_hub import login
+import torch
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+app = Flask(__name__)
+
+# Model configuration
+MODEL_NAME = "PleIAs/Pleias-350m-Preview"
+model = None
+tokenizer = None
+
+def get_model():
+    """Lazy load the model on first request"""
+    global model, tokenizer
+    if model is None:
+        load_model()
+    return model, tokenizer
+
+def load_model():
+    """Load the model and tokenizer"""
+    global model, tokenizer
+    logger.info(f"Loading model: {MODEL_NAME}")
+    try:
+        # Login to HuggingFace if token is available
+        hf_token = os.environ.get('HF_TOKEN') or os.environ.get('HUGGINGFACE_HUB_TOKEN')
+        if hf_token:
+            logger.info("Authenticating with HuggingFace...")
+            login(token=hf_token)
+        
+        # Load tokenizer
+        tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, token=hf_token)
+        
+        # Load model (CPU-only for cost efficiency)
+        model = AutoModelForCausalLM.from_pretrained(
+            MODEL_NAME,
+            torch_dtype=torch.float32,
+            low_cpu_mem_usage=True,
+            token=hf_token
+        )
+        logger.info("Model loaded successfully")
+    except Exception as e:
+        logger.error(f"Error loading model: {str(e)}")
+        raise
+
+# Don't load model at startup - use lazy loading instead
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Health check endpoint - returns healthy even if model not loaded yet"""
+    return jsonify({
+        'status': 'healthy',
+        'model': MODEL_NAME,
+        'model_loaded': model is not None
+    })
+
+@app.route('/debug/env', methods=['GET'])
+def debug_env():
+    """Debug endpoint to check if HF token is configured (shows only first/last 4 chars)"""
+    hf_token = os.environ.get('HF_TOKEN') or os.environ.get('HUGGINGFACE_HUB_TOKEN')
+    if hf_token:
+        masked = f"{hf_token[:4]}...{hf_token[-4:]}"
+    else:
+        masked = "NOT SET"
+    return jsonify({
+        'hf_token_configured': hf_token is not None,
+        'hf_token_masked': masked,
+        'port': os.environ.get('PORT', 'not set')
+    })
+
+@app.route('/generate', methods=['POST'])
+def generate_text():
+    """Generate text from a prompt"""
+    try:
+        # Lazy load model on first request
+        current_model, current_tokenizer = get_model()
+        
+        # Get request data
+        data = request.get_json()
+        if not data or 'prompt' not in data:
+            return jsonify({
+                'error': 'Missing required field: prompt'
+            }), 400
+
+        prompt = data['prompt']
+        max_length = data.get('max_length', 100)
+        temperature = data.get('temperature', 0.7)
+
+        # Validate parameters
+        if max_length > 500:
+            return jsonify({
+                'error': 'max_length cannot exceed 500 tokens'
+            }), 400
+
+        logger.info(f"Generating text for prompt: {prompt[:50]}...")
+
+        # Tokenize input
+        inputs = current_tokenizer(prompt, return_tensors="pt")
+
+        # Generate
+        with torch.no_grad():
+            outputs = current_model.generate(
+                inputs.input_ids,
+                max_length=max_length,
+                temperature=temperature,
+                do_sample=True,
+                pad_token_id=current_tokenizer.eos_token_id
+            )
+
+        # Decode output
+        generated_text = current_tokenizer.decode(outputs[0], skip_special_tokens=True)
+
+        # Return response
+        return jsonify({
+            'prompt': prompt,
+            'generated_text': generated_text,
+            'model': MODEL_NAME
+        })
+
+    except Exception as e:
+        logger.error(f"Error generating text: {str(e)}")
+        return jsonify({
+            'error': 'Internal server error',
+            'details': str(e)
+        }), 500
+
+@app.route('/', methods=['GET'])
+def root():
+    """Root endpoint with API information"""
+    return jsonify({
+        'name': 'PleIAs API',
+        'model': MODEL_NAME,
+        'endpoints': {
+            'health': '/health',
+            'debug': '/debug/env',
+            'generate': '/generate (POST)'
+        }
+    })
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 8080))
+    app.run(host='0.0.0.0', port=port, debug=False)

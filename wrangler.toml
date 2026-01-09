@@ -2,7 +2,7 @@
 # API proxy with auth, rate limiting, and HuggingFace integration
 
 name = "ethicalaiditor-api"
-main = "workers/api-proxy.ts"
+main = "worker/index.js"
 compatibility_date = "2024-01-01"
 
 # D1 Database binding

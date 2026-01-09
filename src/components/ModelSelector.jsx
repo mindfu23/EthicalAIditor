@@ -1,8 +1,8 @@
 /**
  * Model Selector Component for EthicalAIditor
  * 
- * Allows users to choose between PleIAs ethical AI models
- * trained on Common Corpus (permissively licensed data).
+ * Allows users to choose between open-source AI models
+ * available via HuggingFace Inference Providers.
  */
 
 import React from 'react';
@@ -10,20 +10,26 @@ import { Cpu } from 'lucide-react';
 
 const AVAILABLE_MODELS = [
   {
-    id: 'PleIAs/Pleias-1.2b-Preview',
-    name: 'Pleias 1.2B',
-    description: 'More nuanced writing suggestions',
+    id: 'meta-llama/Llama-3.3-70B-Instruct',
+    name: 'Llama 3.3 70B',
+    description: 'Most capable open-source model',
     badge: 'Recommended',
   },
   {
-    id: 'PleIAs/Pleias-350m-Preview',
-    name: 'Pleias 350M',
-    description: 'Faster responses, lighter footprint',
+    id: 'Qwen/Qwen2.5-72B-Instruct',
+    name: 'Qwen 2.5 72B',
+    description: 'Excellent for structured content',
+    badge: null,
+  },
+  {
+    id: 'mistralai/Mistral-Nemo-Instruct-2407',
+    name: 'Mistral Nemo',
+    description: 'Fast and efficient',
     badge: 'Fast',
   },
 ];
 
-const DEFAULT_MODEL = 'PleIAs/Pleias-1.2b-Preview';
+const DEFAULT_MODEL = 'meta-llama/Llama-3.3-70B-Instruct';
 const STORAGE_KEY = 'ethicalaiditor_model';
 
 export function ModelSelector({ value, onChange }) {
@@ -41,7 +47,7 @@ export function ModelSelector({ value, onChange }) {
         <span>AI Model</span>
       </div>
       <p className="text-xs text-gray-500 mb-2">
-        1.2B: More nuanced writing suggestions; 350M: Faster responses, lighter footprint
+        Choose the AI model for writing assistance
       </p>
       <div className="space-y-2">
         {AVAILABLE_MODELS.map((model) => (

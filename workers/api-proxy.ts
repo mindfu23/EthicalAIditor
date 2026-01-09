@@ -10,21 +10,28 @@ export interface Env {
   HUGGINGFACE_API_KEY: string;
 }
 
-// Available ethical AI models from PleIAs (trained on Common Corpus)
-const AVAILABLE_MODELS = {
-  'PleIAs/Pleias-1.2b-Preview': {
-    name: 'Pleias 1.2B',
-    description: 'More nuanced writing suggestions',
+// Available models via HuggingFace Inference Providers
+// Note: PleIAs Common Corpus models are not yet available via Inference Providers
+// Using open-weight alternatives that support the new API
+const AVAILABLE_MODELS: Record<string, { name: string; description: string; maxTokens: number }> = {
+  'meta-llama/Llama-3.3-70B-Instruct': {
+    name: 'Llama 3.3 70B',
+    description: 'High quality writing assistance (recommended)',
     maxTokens: 1024,
   },
-  'PleIAs/Pleias-350m-Preview': {
-    name: 'Pleias 350M', 
-    description: 'Faster responses, lighter footprint',
+  'Qwen/Qwen2.5-72B-Instruct': {
+    name: 'Qwen 2.5 72B',
+    description: 'Strong multilingual support',
+    maxTokens: 1024,
+  },
+  'mistralai/Mistral-Nemo-Instruct-2407': {
+    name: 'Mistral Nemo 12B', 
+    description: 'Faster responses, good for quick edits',
     maxTokens: 512,
   },
 };
 
-const DEFAULT_MODEL = 'PleIAs/Pleias-1.2b-Preview';
+const DEFAULT_MODEL = 'meta-llama/Llama-3.3-70B-Instruct';
 
 // Rate limits for EthicalAIditor (writing sessions need fewer but longer calls)
 const RATE_LIMITS: Record<string, number> = {
@@ -109,6 +116,11 @@ async function checkRateLimit(env: Env, userId: string, tier: string): Promise<{
   const today = new Date().toISOString().split('T')[0];
   const limit = RATE_LIMITS[tier] || RATE_LIMITS.free;
 
+  // For anonymous users, just return default limits without DB tracking
+  if (userId === 'anonymous') {
+    return { allowed: true, remaining: limit, limit, used: 0 };
+  }
+
   let record = await env.DB.prepare(
     'SELECT calls_today FROM rate_limits WHERE user_id = ? AND date = ?'
   ).bind(userId, today).first<{ calls_today: number }>();
@@ -156,73 +168,89 @@ async function logApiUsage(
 // ============================================================
 
 async function handleHuggingFaceRequest(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-  const user = await getUserFromRequest(request, env) || { id: 'anonymous', tier: 'anonymous' };
-  
-  const rateLimit = await checkRateLimit(env, user.id, user.tier);
-  // Rate limiting disabled - just track usage
-
   const startTime = Date.now();
+  let user: { id: string; tier: string } = { id: 'anonymous', tier: 'anonymous' };
+  let model = DEFAULT_MODEL;
   
   try {
+    // Get user (default to anonymous if not authenticated)
+    try {
+      user = await getUserFromRequest(request, env) || { id: 'anonymous', tier: 'anonymous' };
+    } catch (e) {
+      console.error('Error getting user:', e);
+      // Keep default anonymous user
+    }
+    
+    // Try to track rate limits (but don't fail if DB has issues)
+    let rateLimit = { allowed: true, remaining: 999, limit: 999, used: 0 };
+    try {
+      rateLimit = await checkRateLimit(env, user.id, user.tier);
+    } catch (e) {
+      console.error('Error checking rate limit:', e);
+      // Continue without rate limiting if DB fails
+    }
+
     const body = await request.json() as {
       messages: Array<{ role: string; content: string }>;
       model?: string;
-      mcp?: string;
       manuscriptContext?: string;
       stream?: boolean;
     };
 
-    const model = body.model && AVAILABLE_MODELS[body.model as keyof typeof AVAILABLE_MODELS] 
+    model = body.model && AVAILABLE_MODELS[body.model as keyof typeof AVAILABLE_MODELS] 
       ? body.model 
       : DEFAULT_MODEL;
     
     const modelConfig = AVAILABLE_MODELS[model as keyof typeof AVAILABLE_MODELS];
     
     // Build prompt with manuscript context if provided
-    let systemPrompt = `You are an ethical AI writing assistant trained on legally licensed materials. Help writers improve their work while respecting intellectual property.`;
+    let systemPrompt = `You are an ethical AI writing assistant. Help writers improve their work with constructive feedback, suggestions for clarity, style improvements, and creative ideas. Be encouraging and specific in your feedback.`;
     
     if (body.manuscriptContext) {
-      systemPrompt += `\n\nManuscript context:\n${body.manuscriptContext.substring(0, 3000)}`;
+      systemPrompt += `\n\nThe writer is working on the following manuscript:\n\n${body.manuscriptContext.substring(0, 3000)}`;
     }
 
-    // Format messages for the model
-    const formattedMessages = body.messages.map(m => 
-      `${m.role === 'user' ? '[INST]' : ''} ${m.content} ${m.role === 'user' ? '[/INST]' : ''}`
-    ).join('\n');
-    
-    const fullPrompt = `${systemPrompt}\n\n${formattedMessages}`;
+    // Build messages array for chat completions API
+    const chatMessages = [
+      { role: 'system' as const, content: systemPrompt },
+      ...body.messages.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content }))
+    ];
 
-    // If streaming is requested, use the streaming endpoint
+    // If streaming is requested, use streaming endpoint
     if (body.stream) {
-      return handleStreamingRequest(env, ctx, user, model, modelConfig, fullPrompt, rateLimit, startTime);
+      return handleStreamingRequest(env, ctx, user, model, modelConfig, chatMessages, rateLimit, startTime);
     }
 
-    // Non-streaming response (original behavior)
-    const response = await fetch(`https://api-inference.huggingface.co/models/${model}`, {
+    // Use HuggingFace's OpenAI-compatible chat completions API
+    const response = await fetch('https://router.huggingface.co/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${env.HUGGINGFACE_API_KEY}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        inputs: fullPrompt,
-        parameters: {
-          max_new_tokens: modelConfig.maxTokens,
-          temperature: 0.7,
-          return_full_text: false,
-        },
+        model: model,
+        messages: chatMessages,
+        max_tokens: modelConfig.maxTokens,
+        temperature: 0.7,
       }),
     });
 
     if (!response.ok) {
-      const error = await response.json() as { error?: string };
-      throw new Error(error.error || `HuggingFace API error: ${response.status}`);
+      const errorData = await response.json() as { error?: string | { message?: string } };
+      const errorMsg = typeof errorData.error === 'string' 
+        ? errorData.error 
+        : errorData.error?.message || `HuggingFace API error: ${response.status}`;
+      throw new Error(errorMsg);
     }
 
-    const result = await response.json() as Array<{ generated_text: string }>;
-    const generatedText = result[0]?.generated_text || '';
+    const result = await response.json() as { 
+      choices: Array<{ message: { content: string } }>;
+      usage?: { total_tokens: number };
+    };
+    const generatedText = result.choices?.[0]?.message?.content || '';
     const latencyMs = Date.now() - startTime;
-    const tokensConsumed = fullPrompt.length + generatedText.length;
+    const tokensConsumed = result.usage?.total_tokens || 0;
 
     ctx.waitUntil(logApiUsage(env, user.id, model, latencyMs, true, tokensConsumed));
 
@@ -244,95 +272,50 @@ async function handleHuggingFaceRequest(request: Request, env: Env, ctx: Executi
   }
 }
 
-// Streaming handler for Vercel AI SDK compatibility
+// Streaming handler (simplified - streams not yet implemented with new API)
 async function handleStreamingRequest(
   env: Env,
   ctx: ExecutionContext,
   user: { id: string; tier: string },
   model: string,
   modelConfig: { maxTokens: number },
-  fullPrompt: string,
+  chatMessages: Array<{ role: string; content: string }>,
   rateLimit: { remaining: number; limit: number; used: number },
   startTime: number
 ): Promise<Response> {
   try {
-    // HuggingFace streaming API
-    const response = await fetch(`https://api-inference.huggingface.co/models/${model}`, {
+    // For now, fall back to non-streaming and simulate streaming response
+    const response = await fetch('https://router.huggingface.co/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${env.HUGGINGFACE_API_KEY}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        inputs: fullPrompt,
-        parameters: {
-          max_new_tokens: modelConfig.maxTokens,
-          temperature: 0.7,
-          return_full_text: false,
-        },
-        stream: true,
+        model: model,
+        messages: chatMessages,
+        max_tokens: modelConfig.maxTokens,
+        temperature: 0.7,
       }),
     });
 
     if (!response.ok) {
-      const error = await response.json() as { error?: string };
-      throw new Error(error.error || `HuggingFace API error: ${response.status}`);
+      const errorData = await response.json() as { error?: string | { message?: string } };
+      const errorMsg = typeof errorData.error === 'string' 
+        ? errorData.error 
+        : errorData.error?.message || `HuggingFace API error: ${response.status}`;
+      throw new Error(errorMsg);
     }
 
-    // Check if HuggingFace returned streaming response
-    const contentType = response.headers.get('content-type') || '';
+    const result = await response.json() as { 
+      choices: Array<{ message: { content: string } }>;
+      usage?: { total_tokens: number };
+    };
+    const generatedText = result.choices?.[0]?.message?.content || '';
     
-    if (contentType.includes('text/event-stream') && response.body) {
-      // Transform HuggingFace SSE to Vercel AI SDK format
-      const transformStream = new TransformStream({
-        async transform(chunk, controller) {
-          const text = new TextDecoder().decode(chunk);
-          const lines = text.split('\n').filter(line => line.trim());
-          
-          for (const line of lines) {
-            if (line.startsWith('data:')) {
-              const data = line.slice(5).trim();
-              if (data === '[DONE]') {
-                controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
-              } else {
-                try {
-                  const parsed = JSON.parse(data);
-                  const token = parsed.token?.text || parsed.generated_text || '';
-                  if (token) {
-                    // Vercel AI SDK format: data: {"type":"text","value":"..."}\n\n
-                    const aiSdkChunk = JSON.stringify({ type: 'text-delta', textDelta: token });
-                    controller.enqueue(new TextEncoder().encode(`data: ${aiSdkChunk}\n\n`));
-                  }
-                } catch {
-                  // Skip unparseable lines
-                }
-              }
-            }
-          }
-        },
-      });
+    ctx.waitUntil(logApiUsage(env, user.id, model, Date.now() - startTime, true, result.usage?.total_tokens || 0));
 
-      const streamedResponse = response.body.pipeThrough(transformStream);
-      
-      ctx.waitUntil(logApiUsage(env, user.id, model, Date.now() - startTime, true, fullPrompt.length));
-
-      return new Response(streamedResponse, {
-        headers: {
-          'Content-Type': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-          'Connection': 'keep-alive',
-          ...corsHeaders,
-        },
-      });
-    }
-
-    // Fallback: HuggingFace didn't stream, simulate streaming from full response
-    const result = await response.json() as Array<{ generated_text: string }>;
-    const generatedText = result[0]?.generated_text || '';
-    
-    ctx.waitUntil(logApiUsage(env, user.id, model, Date.now() - startTime, true, fullPrompt.length + generatedText.length));
-
-    // Create a simulated stream that sends the full text in chunks
+    // Simulate streaming by sending words one at a time
     const encoder = new TextEncoder();
     const words = generatedText.split(' ');
     
@@ -342,8 +325,7 @@ async function handleStreamingRequest(
           const word = words[i] + (i < words.length - 1 ? ' ' : '');
           const chunk = JSON.stringify({ type: 'text-delta', textDelta: word });
           controller.enqueue(encoder.encode(`data: ${chunk}\n\n`));
-          // Small delay to simulate streaming
-          await new Promise(resolve => setTimeout(resolve, 20));
+          await new Promise(resolve => setTimeout(resolve, 15));
         }
         controller.enqueue(encoder.encode('data: [DONE]\n\n'));
         controller.close();

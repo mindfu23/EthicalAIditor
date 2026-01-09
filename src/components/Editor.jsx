@@ -146,16 +146,7 @@ export default function Editor() {
           <div>
             <h1 className="text-xl font-bold text-gray-900">Ethical AIditor</h1>
             <p className="text-xs text-gray-600 mt-0.5">
-              Powered by{' '}
-              <a 
-                href="https://huggingface.co/collections/PleIAs/common-corpus-65d46e3ea3980fdcd66a5613" 
-                target="_blank" 
-                rel="noopener noreferrer"
-                className="text-blue-600 hover:underline"
-              >
-                Common Corpus
-              </a>
-              {' '}— an LLM trained exclusively on legally permissible data.
+              AI writing assistance powered by open-source models via HuggingFace
             </p>
           </div>
           <p className="text-xs text-gray-500 max-w-xs text-right">

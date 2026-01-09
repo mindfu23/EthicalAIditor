@@ -6,16 +6,16 @@ Complete guide to deploying EthicalAIditor on Netlify with Cloudflare Workers fo
 
 ```
 ┌─────────────────┐     ┌──────────────────────┐     ┌──────────────────┐
-│  Netlify        │     │  Cloudflare Worker   │     │  HuggingFace     │
-│  (Frontend)     │────▶│  (API Proxy)         │────▶│  Inference API   │
-│                 │     │  + D1 Database       │     │                  │
+│  Netlify        │     │  Cloudflare Worker   │     │  Google Cloud    │
+│  (Frontend)     │────▶│  (API Proxy)         │────▶│  Run (llm-api)   │
+│                 │     │  + D1 Database       │     │  PleIAs Model    │
 └─────────────────┘     └──────────────────────┘     └──────────────────┘
 ```
 
 - **Netlify**: Hosts the Vite/React frontend
-- **Cloudflare Worker**: Handles auth, rate limiting, proxies HuggingFace API
+- **Cloudflare Worker**: Handles auth, rate limiting, proxies to LLM API
 - **Cloudflare D1**: SQLite database for users, usage tracking
-- **HuggingFace**: PleIAs models (ethical AI trained on Common Corpus)
+- **Google Cloud Run**: Hosts the Python LLM API with PleIAs model
 
 ---
 
@@ -27,6 +27,7 @@ Complete guide to deploying EthicalAIditor on Netlify with Cloudflare Workers fo
 - [Netlify CLI](https://docs.netlify.com/cli/get-started/) (optional but recommended)
 - Cloudflare account (free tier works)
 - HuggingFace account for API token
+- Google Cloud account with billing enabled
 
 ---
 
@@ -39,15 +40,83 @@ npm install
 
 ---
 
-## Step 2: Set Up Cloudflare
+## Step 2: Deploy LLM API to Google Cloud Run
 
-### 2.1 Login to Cloudflare
+### 2.0 Prerequisites
+
+- [Google Cloud SDK](https://cloud.google.com/sdk/docs/install)
+- A Google Cloud project with billing enabled
+
+### 2.1 Setup Google Cloud
+
+```bash
+# Login to Google Cloud
+gcloud auth login
+
+# Create a new project (or use existing)
+gcloud projects create ethicalaiditor --name="EthicalAIditor"
+gcloud config set project ethicalaiditor
+
+# Enable required APIs
+gcloud services enable cloudbuild.googleapis.com
+gcloud services enable run.googleapis.com
+gcloud services enable containerregistry.googleapis.com
+```
+
+### 2.2 Get HuggingFace Token
+
+1. Go to https://huggingface.co/settings/tokens
+2. Create a new token with "Read" permissions
+3. Save it for the next step
+
+### 2.3 Build and Deploy
+
+```bash
+cd llm-api
+
+# Build the container
+gcloud builds submit --tag gcr.io/ethicalaiditor/llm-api
+
+# Deploy to Cloud Run
+gcloud run deploy llm-api \
+  --image gcr.io/ethicalaiditor/llm-api \
+  --platform managed \
+  --region us-central1 \
+  --allow-unauthenticated \
+  --memory 4Gi \
+  --cpu 2 \
+  --timeout 600 \
+  --max-instances 10 \
+  --min-instances 0 \
+  --set-env-vars HF_TOKEN=your_huggingface_token_here \
+  --cpu-boost
+```
+
+Note the Service URL (e.g., `https://llm-api-xxxxx.us-central1.run.app`)
+
+### 2.4 Verify LLM API
+
+```bash
+# Health check
+curl https://llm-api-xxxxx.us-central1.run.app/health
+
+# Test generation (first call loads model, may take 30-60s)
+curl -X POST https://llm-api-xxxxx.us-central1.run.app/generate \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "The ethical implications of AI are", "max_length": 50}'
+```
+
+---
+
+## Step 3: Set Up Cloudflare Worker
+
+### 3.1 Login to Cloudflare
 
 ```bash
 npx wrangler login
 ```
 
-### 2.2 Create D1 Database
+### 3.2 Create D1 Database
 
 ```bash
 npx wrangler d1 create ethicalaiditor-db
@@ -59,7 +128,7 @@ This outputs something like:
 database_id = "abc123-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 ```
 
-### 2.3 Update wrangler.toml
+### 3.3 Update wrangler.toml
 
 Open `wrangler.toml` and paste your database ID:
 
@@ -70,22 +139,24 @@ database_name = "ethicalaiditor-db"
 database_id = "abc123-xxxx-xxxx-xxxx-xxxxxxxxxxxx"  # <-- Your ID here
 ```
 
-### 2.4 Initialize Database Schema
+### 3.4 Initialize Database Schema
 
 ```bash
 npx wrangler d1 execute ethicalaiditor-db --file=schema.sql
 ```
 
-### 2.5 Set API Secrets
+### 3.5 Set API Secrets
 
 ```bash
+# HuggingFace token (for fallback)
 npx wrangler secret put HUGGINGFACE_API_KEY
-# Paste your HuggingFace token when prompted
+
+# Cloud Run LLM API URL
+npx wrangler secret put LLM_API_URL
+# Paste: https://llm-api-xxxxx.us-central1.run.app
 ```
 
-Get your token from: https://huggingface.co/settings/tokens
-
-### 2.6 Deploy Worker
+### 3.6 Deploy Worker
 
 ```bash
 npx wrangler deploy
@@ -95,15 +166,15 @@ Note the URL output (e.g., `https://ethicalaiditor-api.username.workers.dev`)
 
 ---
 
-## Step 3: Configure Frontend Environment
+## Step 4: Configure Frontend Environment
 
-### 3.1 Create .env file
+### 4.1 Create .env file
 
 ```bash
 cp .env.example .env
 ```
 
-### 3.2 Update with your Worker URL
+### 4.2 Update with your Worker URL
 
 ```env
 VITE_CLOUDFLARE_WORKER_URL=https://ethicalaiditor-api.username.workers.dev
@@ -111,7 +182,7 @@ VITE_CLOUDFLARE_WORKER_URL=https://ethicalaiditor-api.username.workers.dev
 
 ---
 
-## Step 4: Deploy to Netlify
+## Step 5: Deploy to Netlify
 
 ### Option A: Via Netlify CLI
 
@@ -153,7 +224,7 @@ npm run build
 
 ---
 
-## Step 5: Verify Deployment
+## Step 6: Verify Deployment
 
 ### Check Worker Health
 
@@ -190,11 +261,30 @@ curl https://ethicalaiditor-api.username.workers.dev/api/models
 
 ## Local Development
 
+### Frontend Only
+
 ```bash
-# Start Vite dev server
+npm run dev
+```
+
+### LLM API (Python)
+
+```bash
+cd llm-api
+source venv/bin/activate  # Activate virtual environment
+python app.py             # Starts on http://localhost:8080
+```
+
+### Full Stack Local
+
+```bash
+# Terminal 1: Frontend
 npm run dev
 
-# In another terminal, start Worker locally (optional)
+# Terminal 2: LLM API
+cd llm-api && source venv/bin/activate && python app.py
+
+# Terminal 3: Cloudflare Worker (optional)
 npx wrangler dev
 ```
 
@@ -268,3 +358,44 @@ npx wrangler d1 execute ethicalaiditor-db --file=schema.sql
 - [ ] Add bcrypt password hashing
 - [ ] Set up custom domain
 - [ ] Configure Cloudflare Analytics
+
+---
+
+## CI/CD with GitHub Actions (Optional)
+
+You can automate deployments with GitHub Actions:
+
+### .github/workflows/deploy-llm-api.yml
+
+```yaml
+name: Deploy LLM API
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'llm-api/**'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      
+      - uses: google-github-actions/setup-gcloud@v2
+      
+      - name: Deploy to Cloud Run
+        run: |
+          cd llm-api
+          gcloud builds submit --tag gcr.io/${{ secrets.GCP_PROJECT }}/llm-api
+          gcloud run deploy llm-api \
+            --image gcr.io/${{ secrets.GCP_PROJECT }}/llm-api \
+            --region us-central1 \
+            --platform managed
+```
+
+This auto-deploys the LLM API when you push changes to `llm-api/`.

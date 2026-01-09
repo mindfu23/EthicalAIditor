@@ -1,0 +1,68 @@
+.cold-start-indicator {
+  padding: 16px;
+  margin: 12px 0;
+  background-color: #fff3cd;
+  border: 1px solid #ffc107;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+.cold-start-indicator .header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.cold-start-indicator .spinner {
+  width: 20px;
+  height: 20px;
+  border: 3px solid #ffc107;
+  border-top: 3px solid transparent;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+.cold-start-indicator .message {
+  margin: 8px 0;
+  color: #856404;
+}
+
+.cold-start-indicator .progress-bar {
+  background-color: #e0e0e0;
+  border-radius: 4px;
+  height: 8px;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+
+.cold-start-indicator .progress-fill {
+  background-color: #ffc107;
+  height: 100%;
+  transition: width 1s linear;
+}
+
+.cold-start-indicator .timing {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: #856404;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+  .cold-start-indicator {
+    background-color: #332701;
+    border-color: #ffc107;
+  }
+  
+  .cold-start-indicator .message,
+  .cold-start-indicator .timing {
+    color: #ffda6a;
+  }
+}
