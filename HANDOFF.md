@@ -4,10 +4,17 @@
 
 | Component | Status | URL |
 |-----------|--------|-----|
-| ✅ Compute Engine VM | Running | http://34.30.2.20:8080 |
+| ⚠️ Compute Engine VM | Running (needs HTTPS) | http://34.30.2.20:8080 |
+| ✅ Cloud Run | Active (primary) | https://llm-api-1097587800570.us-central1.run.app |
 | ✅ Cloudflare Worker | Working | https://ethicalaiditor-api.valueape.workers.dev |
 | ✅ Netlify Frontend | Deployed | https://ethicalaiditor.netlify.app |
-| 📦 Cloud Run (fallback) | Ready | https://llm-api-1097587800570.us-central1.run.app |
+
+### ⚠️ VM HTTPS Required
+The VM is running but browser blocks HTTP calls from HTTPS sites (mixed content).
+Frontend currently uses **Cloud Run** as primary (has 30-45s cold start).
+
+**To enable VM (no cold start):** Set up nginx + Let's Encrypt on the VM.
+See "Enable HTTPS on VM" section below.
 
 ## DEPLOYMENT OPTIONS
 

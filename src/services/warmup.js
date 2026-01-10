@@ -6,9 +6,11 @@
  */
 
 const API_BASE = import.meta.env.VITE_CLOUDFLARE_WORKER_URL || '';
-// Primary: Compute Engine VM (always on)
-const VM_URL = 'http://34.30.2.20:8080';
-// Fallback: Cloud Run
+// VM URL - disabled due to mixed content (HTTPS site can't call HTTP)
+// To enable: set up nginx + Let's Encrypt on VM, then uncomment
+// const VM_URL = 'http://34.30.2.20:8080';
+const VM_URL = null; // Disabled until HTTPS is configured
+// Primary: Cloud Run (has HTTPS)
 const CLOUD_RUN_URL = 'https://llm-api-1097587800570.us-central1.run.app';
 
 // Service status states
@@ -54,56 +56,59 @@ export function getStatus() {
 }
 
 /**
- * Ping the health endpoint to check service status
- * VM is always on, so this is just a connectivity check
+ * Ping the health endpoint to check/warm up the service
  */
 export async function warmupService() {
   setStatus(ServiceStatus.CHECKING);
-  console.log('[Warmup] Checking VM service status...');
+  console.log('[Warmup] Checking Cloud Run service status...');
 
   try {
-    // Check VM health first (primary)
-    const healthResponse = await fetch(`${VM_URL}/health`, {
-      method: 'GET',
-      headers: { 'Content-Type': 'application/json' }
-    });
+    // VM is disabled (mixed content), go straight to Cloud Run
+    // When VM HTTPS is set up, uncomment the VM check below
+    /*
+    if (VM_URL) {
+      const healthResponse = await fetch(`${VM_URL}/health`, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' }
+      });
 
-    if (healthResponse.ok) {
-      const healthData = await healthResponse.json();
-      console.log('[Warmup] VM health:', healthData);
+      if (healthResponse.ok) {
+        const healthData = await healthResponse.json();
+        console.log('[Warmup] VM health:', healthData);
 
-      if (healthData.model_loaded) {
-        console.log('[Warmup] VM model loaded, service is ready');
-        setStatus(ServiceStatus.READY);
-        return true;
+        if (healthData.model_loaded) {
+          console.log('[Warmup] VM model loaded, service is ready');
+          setStatus(ServiceStatus.READY);
+          return true;
+        }
       }
     }
+    */
     
-    // If VM check failed, try Cloud Run fallback
-    console.log('[Warmup] VM unavailable, trying Cloud Run fallback...');
-    const cloudRunHealth = await fetch(`${CLOUD_RUN_URL}/health`, {
+    // Check Cloud Run health
+    const healthResponse = await fetch(`${CLOUD_RUN_URL}/health`, {
       method: 'GET',
       headers: { 'Content-Type': 'application/json' }
     });
 
-    if (!cloudRunHealth.ok) {
-      console.error('[Warmup] Both VM and Cloud Run unavailable');
+    if (!healthResponse.ok) {
+      console.error('[Warmup] Cloud Run health check failed');
       setStatus(ServiceStatus.ERROR);
       return false;
     }
 
-    const cloudRunData = await cloudRunHealth.json();
-    console.log('[Warmup] Cloud Run health:', cloudRunData);
+    const healthData = await healthResponse.json();
+    console.log('[Warmup] Cloud Run health:', healthData);
 
-    // If Cloud Run model is loaded, we're ready (using fallback)
-    if (cloudRunData.model_loaded) {
-      console.log('[Warmup] Cloud Run model loaded (fallback), service is ready');
+    // If model is already loaded, we're ready!
+    if (healthData.model_loaded) {
+      console.log('[Warmup] Model already loaded, service is ready');
       setStatus(ServiceStatus.READY);
       return true;
     }
 
-    // Cloud Run model not loaded, need to warm up
-    console.log('[Warmup] Cloud Run model not loaded, warming up...');
+    // Model not loaded yet, need to warm up
+    console.log('[Warmup] Model not loaded, warming up LLM service...');
     setStatus(ServiceStatus.WARMING_UP);
 
     // Send a minimal request to Cloud Run to trigger model loading
