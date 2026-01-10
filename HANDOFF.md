@@ -313,6 +313,36 @@ PleIAs 350M is small. Larger models (70B) require:
 
 ---
 
+## Security
+
+### CORS Policy (Updated January 10, 2026)
+The Cloudflare Worker uses **smart CORS** - only allows specific origins:
+
+**Allowed Origins:**
+- ✅ `https://ethicalaiditor.netlify.app` (production)
+- ✅ `http://localhost:5173` (Vite dev server)
+- ✅ `http://localhost:3000` (alternate dev)
+- ✅ `http://127.0.0.1:5173`
+- ✅ `http://127.0.0.1:3000`
+
+**Blocked:**
+- ❌ All other domains (browser CORS error)
+- ⚠️ Direct curl/Postman still works (CORS is browser-enforced only)
+
+### API Keys & Secrets
+| Secret | Location | Status |
+|--------|----------|--------|
+| HF_TOKEN | GCP Secret Manager | ✅ Secure |
+| LLM_API_URL | Cloudflare Worker Secrets | ✅ Secure |
+| User API keys | Browser localStorage | ⚠️ Optional, user-provided |
+
+### Data Privacy
+- Manuscripts stored in browser IndexedDB only
+- Never uploaded to server (unless cloud sync added later)
+- AI sees only 2,000 chars of context per request
+
+---
+
 ## Cost Breakdown
 
 | Service | Monthly Cost | Notes |
@@ -333,6 +363,15 @@ PleIAs 350M is small. Larger models (70B) require:
 - [ ] Add HuggingFace Inference API for larger models
 - [ ] Stripe integration for premium tier
 - [ ] Cloud sync for manuscripts (optional)
+- [ ] Mobile app with local model inference (offline capable)
+
+### Mobile App Considerations
+For future Android/iOS app with local model:
+- PleIAs 350M (~700MB) can run on-device
+- Convert to ONNX, TensorFlow Lite, or CoreML
+- Use llama.cpp for efficient inference
+- No API calls needed = works offline
+- CORS not relevant for native apps
 
 ### Model Selector
 Currently shows "Coming Soon" for:
