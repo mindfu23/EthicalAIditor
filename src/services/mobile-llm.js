@@ -5,12 +5,12 @@
  * via Capacitor native plugins.
  * 
  * Architecture:
- * - iOS: Uses llama.cpp compiled as iOS framework (via capacitor-llama plugin)
+ * - iOS: Uses llama.cpp compiled as iOS framework (via capacitor-llama-cpp plugin)
  * - Android: Uses llama.cpp compiled as Android NDK library
  * - Both platforms store models in app's private documents directory
  */
 
-import { Capacitor } from '@anthropic/capacitor-core';
+import { Capacitor } from '@capacitor/core';
 
 // Platform detection
 export const Platform = {
@@ -108,10 +108,10 @@ export async function initializeMobileLLM() {
   }
   
   try {
-    // Dynamic import of the Capacitor llama plugin
+    // Dynamic import of our local Capacitor llama.cpp plugin
     // This plugin wraps llama.cpp for iOS/Android
-    const { LlamaPlugin } = await import('@anthropic/capacitor-llama');
-    llamaPlugin = LlamaPlugin;
+    const { LlamaCpp } = await import('capacitor-llama-cpp');
+    llamaPlugin = LlamaCpp;
     
     console.log('[Mobile LLM] Plugin initialized');
     return true;
