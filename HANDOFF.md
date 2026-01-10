@@ -4,12 +4,134 @@
 
 | Component | Status | URL |
 |-----------|--------|-----|
-| 🔄 Cloud Run LLM API | Ready to Deploy | https://llm-api-1097587800570.us-central1.run.app |
+| ✅ Compute Engine VM | Running | http://34.30.2.20:8080 |
 | ✅ Cloudflare Worker | Working | https://ethicalaiditor-api.valueape.workers.dev |
 | ✅ Netlify Frontend | Deployed | https://ethicalaiditor.netlify.app |
-| 🔄 Baked Model | Ready to Build | Will reduce cold start by 30-40s |
+| 📦 Cloud Run (fallback) | Ready | https://llm-api-1097587800570.us-central1.run.app |
 
-## NEXT STEPS (Resume Here)
+## DEPLOYMENT OPTIONS
+
+### Option 1: Google Compute Engine VM (RECOMMENDED)
+**Cost:** ~$25/month (e2-medium) | **Cold Start:** 0 seconds (always on)
+
+### Option 2: Cloud Run with Baked Model (FALLBACK)
+**Cost:** $0-5/month (pay per use) | **Cold Start:** 30-45 seconds
+
+---
+
+## OPTION 1: Compute Engine VM Setup (RECOMMENDED)
+
+### Step 1: Create the VM
+```bash
+# Create e2-medium VM in us-central1 (4GB RAM needed for model)
+gcloud compute instances create llm-api-vm \
+  --project=ethicalaiditorv2 \
+  --zone=us-central1-a \
+  --machine-type=e2-medium \
+  --image-family=ubuntu-2204-lts \
+  --image-project=ubuntu-os-cloud \
+  --boot-disk-size=20GB \
+  --tags=http-server,https-server
+
+# Allow HTTP traffic on port 8080
+gcloud compute firewall-rules create allow-llm-api \
+  --project=ethicalaiditorv2 \
+  --allow=tcp:8080 \
+  --target-tags=http-server \
+  --description="Allow LLM API traffic"
+```
+
+### Step 2: SSH into VM and Install Dependencies
+```bash
+# Get VM IP
+gcloud compute instances describe llm-api-vm \
+  --zone=us-central1-a \
+  --format='get(networkInterfaces[0].accessConfigs[0].natIP)'
+
+# SSH into VM
+gcloud compute ssh llm-api-vm --zone=us-central1-a
+
+# Once connected, run setup script (or copy commands manually):
+sudo apt-get update && sudo apt-get upgrade -y
+sudo apt-get install -y python3 python3-pip python3-venv git
+sudo mkdir -p /opt/llm-api/app
+sudo chown $USER:$USER /opt/llm-api
+cd /opt/llm-api
+python3 -m venv venv
+source venv/bin/activate
+pip install --upgrade pip
+pip install flask flask-cors gunicorn transformers torch python-dotenv huggingface_hub
+```
+
+### Step 3: Deploy Application Files
+```bash
+# From your LOCAL machine, copy files to VM:
+cd /Users/jamesbeach/Documents/visual-studio-code/github-copilot/EthicalAIditor/llm-api/vm-setup
+
+# Replace YOUR_VM_IP with the IP from Step 2
+VM_IP="YOUR_VM_IP"
+scp app.py ${USER}@${VM_IP}:/opt/llm-api/app/
+scp llm-api.service ${USER}@${VM_IP}:/opt/llm-api/
+```
+
+### Step 4: Configure and Start Service
+```bash
+# SSH back into VM
+gcloud compute ssh llm-api-vm --zone=us-central1-a
+
+# Set your HuggingFace token
+echo "HF_TOKEN=YOUR_HUGGINGFACE_TOKEN" | sudo tee /opt/llm-api/.env
+
+# Install and start systemd service
+sudo cp /opt/llm-api/llm-api.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable llm-api
+sudo systemctl start llm-api
+
+# Watch logs (model takes ~60s to load first time)
+sudo journalctl -u llm-api -f
+```
+
+### Step 5: Update Frontend to Use VM
+```bash
+# Get VM's external IP
+gcloud compute instances describe llm-api-vm \
+  --zone=us-central1-a \
+  --format='get(networkInterfaces[0].accessConfigs[0].natIP)'
+
+# Update src/services/huggingface.js:
+# Change CLOUD_RUN_URL to: http://YOUR_VM_IP:8080
+```
+
+### Step 6: Test
+```bash
+curl -X POST http://YOUR_VM_IP:8080/chat \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"Hello, how are you?","max_tokens":50}'
+```
+
+### VM Management Commands
+```bash
+# Check service status
+sudo systemctl status llm-api
+
+# View logs
+sudo journalctl -u llm-api -f
+
+# Restart service
+sudo systemctl restart llm-api
+
+# Stop/Start VM (to save costs when not using)
+gcloud compute instances stop llm-api-vm --zone=us-central1-a
+gcloud compute instances start llm-api-vm --zone=us-central1-a
+```
+
+---
+
+## OPTION 2: Cloud Run with Baked Model (FALLBACK)
+
+Use this if you prefer pay-per-use pricing or want serverless scaling.
+Docker files are in `llm-api/` directory.
 
 ### Step 1: Set up HF_TOKEN in Secret Manager (one-time)
 ```bash
@@ -49,41 +171,37 @@ curl -s -X POST https://llm-api-1097587800570.us-central1.run.app/chat \
 
 ## What Changed (January 10, 2026)
 
-### Baked Model into Docker Image
+### Added Compute Engine VM Deployment
+- **llm-api/vm-setup/** - New directory with VM deployment files
+  - `app.py` - Simplified Flask app for VM (loads model once at startup)
+  - `llm-api.service` - systemd service configuration
+  - `01-install-dependencies.sh` - VM setup script
+  - `02-deploy-app.sh` - Deployment helper script
+
+### Baked Model Docker (Fallback Option)
 - **llm-api/Dockerfile** - Downloads model at build time
 - **llm-api/download_model.py** - Script to pre-download model
 - **llm-api/cloudbuild.yaml** - Passes HF_TOKEN from Secret Manager
 - **llm-api/app.py** - Uses baked model cache, supports EAGER_LOAD option
 
-### Expected Cold Start Times
-| Setup | Cold Start |
-|-------|------------|
-| Previous (download at runtime) | 60-90+ sec |
-| **New (baked model)** | **30-45 sec** |
-| With min-instances=1 | 0 sec (always warm) |
+### Expected Response Times
+| Deployment | First Request | Subsequent |
+|------------|---------------|------------|
+| **Compute Engine VM** | **0 sec** (always on) | 2-5 sec |
+| Cloud Run (baked) | 30-45 sec | 2-5 sec |
+| Cloud Run (download) | 60-90 sec | 2-5 sec |
 
 ---
 
-## Future: Enable min-instances=1 (No Cold Start)
+## Cost Comparison
 
-When you want to pay ~$15-25/month for instant responses:
+| Option | Monthly Cost | Notes |
+|--------|-------------|-------|
+| Compute Engine e2-medium | ~$25 | Always on, 0 cold start |
+| Cloud Run min-instances=1 | ~$15-25 | Always on, needs EAGER_LOAD |
+| Cloud Run scale-to-zero | $0-5 | Pay per use, 30-45s cold start |
 
-```bash
-# Enable always-on instance
-gcloud run services update llm-api \
-  --min-instances=1 \
-  --region=us-central1
-
-# Optional: Enable eager model loading (loads during container startup)
-gcloud run services update llm-api \
-  --set-env-vars="EAGER_LOAD=true" \
-  --region=us-central1
-```
-
-To revert back to scale-to-zero:
-```bash
-gcloud run services update llm-api --min-instances=0 --region=us-central1
-```
+**Recommendation:** Use Compute Engine VM for consistent, fast responses.
 
 ---
 
@@ -123,13 +241,19 @@ Then trigger the chat in the browser to see what endpoint is being called.
 
 ```
 EthicalAIditor/
-├── llm-api/                    # Python Flask API (deployed to Cloud Run)
-│   ├── app.py                  # Main API - /health, /generate, /debug/env
-│   ├── requirements.txt
-│   ├── Dockerfile
-│   └── venv/                   # Local only, not in git
+├── llm-api/                    # LLM API deployment options
+│   ├── vm-setup/               # ← RECOMMENDED: VM deployment
+│   │   ├── app.py              # Simplified Flask app for VM
+│   │   ├── llm-api.service     # systemd service file
+│   │   ├── 01-install-dependencies.sh
+│   │   └── 02-deploy-app.sh
+│   ├── app.py                  # Docker/Cloud Run version (FALLBACK)
+│   ├── Dockerfile              # Docker build for Cloud Run
+│   ├── download_model.py       # Pre-download model for Docker
+│   ├── cloudbuild.yaml         # Cloud Build config
+│   └── requirements.txt
 ├── worker/
-│   └── index.js                # Cloudflare Worker - proxies to Cloud Run
+│   └── index.js                # Cloudflare Worker - proxies to API
 ├── src/                        # React/Vite frontend
 ├── wrangler.toml               # Cloudflare Worker config
 ├── netlify.toml                # Netlify config

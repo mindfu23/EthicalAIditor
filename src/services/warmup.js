@@ -1,11 +1,14 @@
 /**
  * Service Warmup Module
  * 
- * Pings the Cloud Run service on page load to trigger warm-up
- * before the user tries to send a chat message.
+ * Checks the Compute Engine VM status on page load.
+ * VM is always-on so no warmup needed, but we verify it's responding.
  */
 
 const API_BASE = import.meta.env.VITE_CLOUDFLARE_WORKER_URL || '';
+// Primary: Compute Engine VM (always on)
+const VM_URL = 'http://34.30.2.20:8080';
+// Fallback: Cloud Run
 const CLOUD_RUN_URL = 'https://llm-api-1097587800570.us-central1.run.app';
 
 // Service status states
@@ -51,42 +54,59 @@ export function getStatus() {
 }
 
 /**
- * Ping the health endpoint to warm up the service
- * Returns true if service is ready, false otherwise
+ * Ping the health endpoint to check service status
+ * VM is always on, so this is just a connectivity check
  */
 export async function warmupService() {
   setStatus(ServiceStatus.CHECKING);
-  console.log('[Warmup] Checking Cloud Run service status...');
+  console.log('[Warmup] Checking VM service status...');
 
   try {
-    // First check Cloud Run health (this is fast even when cold)
-    const healthResponse = await fetch(`${CLOUD_RUN_URL}/health`, {
+    // Check VM health first (primary)
+    const healthResponse = await fetch(`${VM_URL}/health`, {
       method: 'GET',
       headers: { 'Content-Type': 'application/json' }
     });
 
-    if (!healthResponse.ok) {
-      console.error('[Warmup] Cloud Run health check failed');
+    if (healthResponse.ok) {
+      const healthData = await healthResponse.json();
+      console.log('[Warmup] VM health:', healthData);
+
+      if (healthData.model_loaded) {
+        console.log('[Warmup] VM model loaded, service is ready');
+        setStatus(ServiceStatus.READY);
+        return true;
+      }
+    }
+    
+    // If VM check failed, try Cloud Run fallback
+    console.log('[Warmup] VM unavailable, trying Cloud Run fallback...');
+    const cloudRunHealth = await fetch(`${CLOUD_RUN_URL}/health`, {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' }
+    });
+
+    if (!cloudRunHealth.ok) {
+      console.error('[Warmup] Both VM and Cloud Run unavailable');
       setStatus(ServiceStatus.ERROR);
       return false;
     }
 
-    const healthData = await healthResponse.json();
-    console.log('[Warmup] Cloud Run health:', healthData);
+    const cloudRunData = await cloudRunHealth.json();
+    console.log('[Warmup] Cloud Run health:', cloudRunData);
 
-    // If model is already loaded, we're ready!
-    if (healthData.model_loaded) {
-      console.log('[Warmup] Model already loaded, service is ready');
+    // If Cloud Run model is loaded, we're ready (using fallback)
+    if (cloudRunData.model_loaded) {
+      console.log('[Warmup] Cloud Run model loaded (fallback), service is ready');
       setStatus(ServiceStatus.READY);
       return true;
     }
 
-    // Model not loaded yet, need to warm up
-    console.log('[Warmup] Model not loaded, warming up LLM service...');
+    // Cloud Run model not loaded, need to warm up
+    console.log('[Warmup] Cloud Run model not loaded, warming up...');
     setStatus(ServiceStatus.WARMING_UP);
 
-    // Send a minimal request to Cloud Run directly to trigger model loading
-    // This bypasses the Cloudflare Worker timeout limit
+    // Send a minimal request to Cloud Run to trigger model loading
     const warmupStart = Date.now();
     
     const llmResponse = await fetch(`${CLOUD_RUN_URL}/chat`, {

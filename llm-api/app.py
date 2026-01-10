@@ -1,3 +1,17 @@
+"""
+EthicalAIditor LLM API - Docker/Cloud Run Version (FALLBACK)
+=============================================================
+This is the Docker-based deployment for Cloud Run.
+For the recommended VM deployment, see: llm-api/vm-setup/app.py
+
+Use this if you prefer:
+- Serverless/scale-to-zero pricing ($0-5/month)
+- Automatic scaling
+- No server management
+
+Trade-off: 30-45 second cold start (model baked into image)
+"""
+
 import os
 import logging
 from dotenv import load_dotenv

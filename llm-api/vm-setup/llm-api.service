@@ -1,0 +1,25 @@
+[Unit]
+Description=EthicalAIditor LLM API
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/llm-api/app
+Environment="PATH=/opt/llm-api/venv/bin"
+EnvironmentFile=/opt/llm-api/.env
+ExecStart=/opt/llm-api/venv/bin/gunicorn --bind 0.0.0.0:8080 --timeout 300 --workers 1 app:app
+Restart=always
+RestartSec=10
+
+# Resource limits - prevent OOM killer from being too aggressive
+MemoryMax=3.5G
+MemoryHigh=3G
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=llm-api
+
+[Install]
+WantedBy=multi-user.target
