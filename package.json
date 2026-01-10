@@ -2,7 +2,7 @@
   "name": "ethicalaiditor",
   "version": "1.0.0",
   "description": "An interface and AI wrapper for writers and editors, that's linked to LLMs trained only on legally and publicly available writing materials.",
-  "main": "index.js",
+  "main": "electron/main.js",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -10,7 +10,48 @@
     "preview": "vite preview",
     "worker:dev": "wrangler dev",
     "worker:deploy": "wrangler deploy",
-    "db:init": "wrangler d1 execute ethicalaiditor-db --file=schema.sql"
+    "db:init": "wrangler d1 execute ethicalaiditor-db --file=schema.sql",
+    "electron:dev": "NODE_ENV=development electron .",
+    "electron:build": "vite build && electron-builder --mac",
+    "electron:pack": "electron-builder --mac --dir"
+  },
+  "build": {
+    "appId": "com.ethicalaiditor.app",
+    "productName": "EthicalAIditor",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "node_modules/**/*"
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "public/icon.icns",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "electron/entitlements.mac.plist",
+      "entitlementsInherit": "electron/entitlements.mac.plist"
+    },
+    "dmg": {
+      "contents": [
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    }
   },
   "repository": {
     "type": "git",
@@ -37,6 +78,7 @@
     "clsx": "^2.1.1",
     "lucide-react": "^0.562.0",
     "mammoth": "^1.11.0",
+    "node-llama-cpp": "^3.0.0",
     "pdfjs-dist": "^5.4.530",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
@@ -47,6 +89,8 @@
     "@cloudflare/workers-types": "^4.20241230.0",
     "@vitejs/plugin-react": "^4.7.0",
     "autoprefixer": "^10.4.23",
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0",
     "postcss": "^8.5.6",
     "tailwindcss": "^3.4.17",
     "vite": "^6.4.1",

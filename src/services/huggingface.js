@@ -4,7 +4,11 @@
  * Calls Compute Engine VM directly for LLM requests (always-on, no cold start).
  * Falls back to Cloud Run or direct HuggingFace API if needed.
  * Supports PleIAs ethical AI models trained on Common Corpus.
+ * 
+ * Desktop (Electron): Can use local llama.cpp inference for instant, offline responses.
  */
+
+import { isElectron, generateLocal } from './local-llm.js';
 
 const API_BASE = import.meta.env.VITE_CLOUDFLARE_WORKER_URL || '';
 // Netlify Function to proxy to VM (Netlify can call HTTP, unlike Cloudflare Workers)
@@ -12,6 +16,34 @@ const NETLIFY_VM_ENDPOINT = '/.netlify/functions/vm-chat';
 // Direct Cloud Run (HTTPS, has cold start)
 const CLOUD_RUN_URL = 'https://llm-api-1097587800570.us-central1.run.app';
 const DEFAULT_MODEL = 'PleIAs/Pleias-1.2b-Preview';
+
+// Inference mode: 'cloud' (default) or 'local' (Electron only)
+export const InferenceMode = {
+  CLOUD: 'cloud',
+  LOCAL: 'local'
+};
+
+/**
+ * Get current inference mode from settings
+ */
+export function getInferenceMode() {
+  if (!isElectron()) return InferenceMode.CLOUD;
+  return localStorage.getItem('ethicalaiditor_inference_mode') || InferenceMode.CLOUD;
+}
+
+/**
+ * Set inference mode
+ */
+export function setInferenceMode(mode) {
+  localStorage.setItem('ethicalaiditor_inference_mode', mode);
+}
+
+/**
+ * Check if local inference is available
+ */
+export function isLocalInferenceAvailable() {
+  return isElectron();
+}
 
 // Average response time tracking (for estimating wait times)
 let lastResponseTime = 45000; // Start with 45s estimate
@@ -93,6 +125,12 @@ function getSelectedModel() {
  * @returns {Promise<string>} - Generated text response
  */
 export const chatWithLLM = async (messages, manuscriptContext = '', model = null, onProgress = null) => {
+  // Check if using local inference (Electron desktop app)
+  const inferenceMode = getInferenceMode();
+  if (inferenceMode === InferenceMode.LOCAL && isElectron()) {
+    return chatWithLocalLLM(messages, manuscriptContext, onProgress);
+  }
+  
   const selectedModel = model || getSelectedModel();
   const startTime = Date.now();
   
@@ -316,5 +354,47 @@ export const getAvailableModels = async () => {
     return null;
   }
 };
+
+/**
+ * Chat with local LLM (Electron desktop app only)
+ * Uses llama.cpp via node-llama-cpp for instant, offline inference
+ */
+async function chatWithLocalLLM(messages, manuscriptContext = '', onProgress = null) {
+  const startTime = Date.now();
+  
+  // Build prompt
+  const contextPrefix = manuscriptContext 
+    ? `Context from manuscript:\n---\n${manuscriptContext.substring(0, 2000)}\n---\n\n`
+    : '';
+  const userMessage = messages.map(m => `${m.role}: ${m.content}`).join('\n');
+  const prompt = contextPrefix + userMessage;
+  
+  // Start progress tracking (local inference is much faster)
+  let progressInterval = null;
+  if (onProgress) {
+    const estimated = 5000; // Local models are fast, estimate 5s
+    progressInterval = setInterval(() => {
+      const elapsed = Date.now() - startTime;
+      onProgress(elapsed, estimated);
+    }, 200);
+  }
+  
+  try {
+    console.log('[Local LLM] Generating response...');
+    const result = await generateLocal(prompt, {
+      maxTokens: 256,
+      temperature: 0.7
+    });
+    
+    if (progressInterval) clearInterval(progressInterval);
+    console.log(`[Local LLM] Generated in ${result.elapsed}s`);
+    
+    return cleanResponse(result.text);
+  } catch (error) {
+    if (progressInterval) clearInterval(progressInterval);
+    console.error('[Local LLM] Error:', error);
+    throw error;
+  }
+}
 
 export { DEFAULT_MODEL };
