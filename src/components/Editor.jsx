@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Upload, Send, Settings, FileText, MessageSquare, Save, User, LogOut, X, Loader2, Zap, CheckCircle, AlertCircle } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
-import { getUsageStats, chatWithLLM } from '../services/huggingface';
+import { getUsageStats, chatWithLLM, getEstimatedResponseTime } from '../services/huggingface';
 import { useAuth } from '../lib/auth';
 import { ModelSelector, useSelectedModel } from './ModelSelector';
 import { saveManuscript, loadManuscript, getAllManuscripts } from '../lib/storage/manuscript-store';
@@ -30,6 +30,10 @@ export default function Editor() {
   
   // Service status for warmup indicator
   const [serviceStatus, setServiceStatus] = useState(ServiceStatus.UNKNOWN);
+  
+  // Elapsed time tracking for loading indicator
+  const [elapsedTime, setElapsedTime] = useState(0);
+  const [estimatedTime, setEstimatedTime] = useState(45000);
   
   const fileInputRef = useRef(null);
   const messagesEndRef = useRef(null);
@@ -119,12 +123,18 @@ export default function Editor() {
     setMessages(prev => [...prev, userMessage]);
     setInput('');
     setIsLoading(true);
+    setElapsedTime(0);
+    setEstimatedTime(getEstimatedResponseTime());
 
     try {
       const response = await chatWithLLM(
         [...messages, userMessage].map(m => ({ role: m.role, content: m.content })),
         manuscript,
-        selectedModel
+        selectedModel,
+        (elapsed, estimated) => {
+          setElapsedTime(elapsed);
+          setEstimatedTime(estimated);
+        }
       );
       
       setMessages(prev => [...prev, { 
@@ -366,11 +376,16 @@ export default function Editor() {
                 <div className="bg-white border border-gray-200 rounded-lg p-3 text-sm text-gray-500">
                   <div className="flex items-center gap-2">
                     <Loader2 size={14} className="animate-spin" />
-                    <span>Thinking...</span>
+                    <span>Thinking... {Math.round(elapsedTime / 1000)}s / ~{Math.round(estimatedTime / 1000)}s</span>
                   </div>
                   {serviceStatus === ServiceStatus.WARMING_UP && (
                     <p className="text-xs text-amber-600 mt-2">
-                      ⏳ AI is still warming up, this may take up to 60 seconds...
+                      ⏳ AI is warming up, first response may take longer...
+                    </p>
+                  )}
+                  {elapsedTime > 30000 && (
+                    <p className="text-xs text-amber-600 mt-2">
+                      ⏳ Still processing, please wait...
                     </p>
                   )}
                 </div>

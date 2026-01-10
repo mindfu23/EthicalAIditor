@@ -13,8 +13,51 @@ const NETLIFY_VM_ENDPOINT = '/.netlify/functions/vm-chat';
 const CLOUD_RUN_URL = 'https://llm-api-1097587800570.us-central1.run.app';
 const DEFAULT_MODEL = 'PleIAs/Pleias-1.2b-Preview';
 
-// Check if fetch is available (should be in all modern browsers and Node 18+)
-const fetchFn = typeof fetch !== 'undefined' ? fetch : null;
+// Average response time tracking (for estimating wait times)
+let lastResponseTime = 45000; // Start with 45s estimate
+let responseTimeHistory = [];
+
+/**
+ * Get estimated response time based on history
+ */
+export function getEstimatedResponseTime() {
+  if (responseTimeHistory.length === 0) return lastResponseTime;
+  const avg = responseTimeHistory.reduce((a, b) => a + b, 0) / responseTimeHistory.length;
+  return Math.round(avg);
+}
+
+/**
+ * Clean up model response - remove instruction tokens and ensure complete sentences
+ */
+function cleanResponse(text) {
+  if (!text) return '';
+  
+  // Remove common instruction tokens and artifacts
+  let cleaned = text
+    .replace(/\[INST\]/gi, '')
+    .replace(/\[\/INST\]/gi, '')
+    .replace(/<<SYS>>.*?<<\/SYS>>/gs, '')
+    .replace(/<\|.*?\|>/g, '')
+    .replace(/^(user|assistant|system):\s*/gim, '')
+    .trim();
+  
+  // If the response appears to be cut off mid-sentence, trim to last complete sentence
+  // Look for sentence-ending punctuation followed by space or end
+  const sentences = cleaned.match(/[^.!?]*[.!?]+(?:\s|$)/g);
+  
+  if (sentences && sentences.length > 0) {
+    // If the cleaned text doesn't end with punctuation, use complete sentences only
+    const lastChar = cleaned.slice(-1);
+    if (!/[.!?]/.test(lastChar)) {
+      cleaned = sentences.join('').trim();
+    }
+  }
+  
+  // Clean up any double spaces or weird whitespace
+  cleaned = cleaned.replace(/\s+/g, ' ').trim();
+  
+  return cleaned;
+}
 
 /**
  * Get auth headers from local storage
@@ -46,18 +89,45 @@ function getSelectedModel() {
  * @param {Array} messages - Array of {role, content} message objects
  * @param {string} manuscriptContext - Optional manuscript text for context
  * @param {string} model - Optional model override (defaults to user selection)
+ * @param {function} onProgress - Optional callback for progress updates (elapsed, estimated)
  * @returns {Promise<string>} - Generated text response
  */
-export const chatWithLLM = async (messages, manuscriptContext = '', model = null) => {
+export const chatWithLLM = async (messages, manuscriptContext = '', model = null, onProgress = null) => {
   const selectedModel = model || getSelectedModel();
+  const startTime = Date.now();
+  
+  // Start progress tracking
+  let progressInterval = null;
+  if (onProgress) {
+    const estimated = getEstimatedResponseTime();
+    progressInterval = setInterval(() => {
+      const elapsed = Date.now() - startTime;
+      onProgress(elapsed, estimated);
+    }, 500);
+  }
+  
+  const cleanupAndReturn = (response) => {
+    if (progressInterval) clearInterval(progressInterval);
+    
+    // Track response time for future estimates
+    const elapsed = Date.now() - startTime;
+    responseTimeHistory.push(elapsed);
+    if (responseTimeHistory.length > 5) responseTimeHistory.shift(); // Keep last 5
+    lastResponseTime = elapsed;
+    
+    // Clean the response
+    return cleanResponse(response);
+  };
 
   // If no API configured, fall back to direct HuggingFace call (requires user's API key)
   if (!API_BASE && !CLOUD_RUN_URL) {
     const apiKey = localStorage.getItem('hf_api_key');
     if (!apiKey) {
+      if (progressInterval) clearInterval(progressInterval);
       throw new Error('Please configure the Cloudflare Worker URL or provide a HuggingFace API key in settings.');
     }
-    return directHuggingFaceCall(messages, selectedModel, apiKey, manuscriptContext);
+    const result = await directHuggingFaceCall(messages, selectedModel, apiKey, manuscriptContext);
+    return cleanupAndReturn(result);
   }
 
   // Build prompt with truncated context to stay under token limits
@@ -83,7 +153,7 @@ export const chatWithLLM = async (messages, manuscriptContext = '', model = null
     if (response.ok) {
       const result = await response.json();
       console.log('[Chat] Cloud Run response received');
-      return result.text || result.response || '';
+      return cleanupAndReturn(result.text || result.response || '');
     }
     
     const err = await response.json().catch(() => ({}));
@@ -108,7 +178,7 @@ export const chatWithLLM = async (messages, manuscriptContext = '', model = null
     if (response.ok) {
       const result = await response.json();
       console.log('[Chat] Response received from:', result.source);
-      return result.text || '';
+      return cleanupAndReturn(result.text || '');
     }
     
     const err = await response.json().catch(() => ({}));
@@ -134,20 +204,23 @@ export const chatWithLLM = async (messages, manuscriptContext = '', model = null
       if (!response.ok) {
         const err = await response.json().catch(() => ({}));
         if (response.status === 429) {
+          if (progressInterval) clearInterval(progressInterval);
           throw new Error(`Rate limit exceeded. ${err.error || 'Please sign up for more requests or wait until tomorrow.'}`);
         }
         console.error('[Chat] Worker fallback error:', err);
+        if (progressInterval) clearInterval(progressInterval);
         throw new Error(err.error || `API error: ${response.status}`);
       }
 
       const result = await response.json();
-      return result.text || '';
+      return cleanupAndReturn(result.text || '');
     } catch (workerError) {
       console.error('[Chat] Worker fallback also failed:', workerError);
     }
   }
   
-  // All fallbacks failed
+  // All fallbacks failed - clean up progress interval
+  if (progressInterval) clearInterval(progressInterval);
   throw new Error('AI service temporarily unavailable. Please try again.');
 };
 
