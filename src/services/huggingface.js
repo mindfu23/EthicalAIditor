@@ -7,8 +7,8 @@
  */
 
 const API_BASE = import.meta.env.VITE_CLOUDFLARE_WORKER_URL || '';
-// VM is proxied through Cloudflare Worker (Worker calls HTTP VM, browser gets HTTPS)
-const WORKER_VM_ENDPOINT = `${API_BASE}/api/vm/chat`;
+// Netlify Function to proxy to VM (Netlify can call HTTP, unlike Cloudflare Workers)
+const NETLIFY_VM_ENDPOINT = '/.netlify/functions/vm-chat';
 // Direct Cloud Run (HTTPS, has cold start)
 const CLOUD_RUN_URL = 'https://llm-api-1097587800570.us-central1.run.app';
 const DEFAULT_MODEL = 'PleIAs/Pleias-1.2b-Preview';
@@ -57,31 +57,29 @@ export const chatWithLLM = async (messages, manuscriptContext = '', model = null
     return directHuggingFaceCall(messages, selectedModel, apiKey, manuscriptContext);
   }
 
-  // Try Worker VM proxy first (Worker calls HTTP VM, no mixed content issue)
-  if (API_BASE) {
-    try {
-      console.log('[Chat] Calling VM via Worker proxy...');
-      const response = await fetch(WORKER_VM_ENDPOINT, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          prompt: messages.map(m => `${m.role}: ${m.content}`).join('\n'),
-          max_tokens: 500,
-          temperature: 0.7,
-        }),
-      });
+  // Try Netlify Function VM proxy first (Netlify can call HTTP endpoints)
+  try {
+    console.log('[Chat] Calling VM via Netlify Function...');
+    const response = await fetch(NETLIFY_VM_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prompt: messages.map(m => `${m.role}: ${m.content}`).join('\n'),
+        max_tokens: 500,
+        temperature: 0.7,
+      }),
+    });
 
-      if (response.ok) {
-        const result = await response.json();
-        console.log('[Chat] Response received from:', result.source);
-        return result.text || '';
-      }
-      
-      const err = await response.json().catch(() => ({}));
-      console.error('[Chat] Worker proxy error:', err);
-    } catch (error) {
-      console.error('[Chat] Worker proxy failed, trying direct Cloud Run:', error);
+    if (response.ok) {
+      const result = await response.json();
+      console.log('[Chat] Response received from:', result.source);
+      return result.text || '';
     }
+    
+    const err = await response.json().catch(() => ({}));
+    console.error('[Chat] Netlify Function error:', err);
+  } catch (error) {
+    console.error('[Chat] Netlify Function failed, trying Cloud Run:', error);
   }
 
   // Fallback: Direct Cloud Run call

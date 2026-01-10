@@ -37,17 +37,24 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 MODEL_NAME = "PleIAs/Pleias-350m-Preview"
 # Use baked-in model cache if available, otherwise use default HF cache
 MODEL_CACHE_DIR = os.environ.get('MODEL_CACHE_DIR', None)
-# Set to "true" to load model at startup instead of first request (useful with min-instances=1)
+# Set to "true" to load model at startup in a background thread (useful with min-instances=1)
 EAGER_LOAD = os.environ.get('EAGER_LOAD', 'false').lower() == 'true'
 
 model = None
 tokenizer = None
+model_loading = False  # Track if model is currently loading
 
 def get_model():
     """Lazy load the model on first request"""
-    global model, tokenizer
+    global model, tokenizer, model_loading
     if model is None:
-        load_model()
+        if model_loading:
+            # Wait for background load to complete
+            import time
+            while model_loading and model is None:
+                time.sleep(0.5)
+        else:
+            load_model()
     return model, tokenizer
 
 def load_model():
@@ -84,12 +91,25 @@ def load_model():
         logger.info("Model loaded successfully")
     except Exception as e:
         logger.error(f"Error loading model: {str(e)}")
+        model_loading = False
         raise
+    finally:
+        model_loading = False
 
-# Load model at startup if EAGER_LOAD is enabled (good for min-instances=1)
+def load_model_background():
+    """Load model in background thread"""
+    global model_loading
+    model_loading = True
+    try:
+        load_model()
+    except Exception as e:
+        logger.error(f"Background model load failed: {e}")
+
+# Load model at startup in background thread if EAGER_LOAD is enabled
 if EAGER_LOAD:
-    logger.info("EAGER_LOAD enabled - loading model at startup...")
-    load_model()
+    import threading
+    logger.info("EAGER_LOAD enabled - starting background model load...")
+    threading.Thread(target=load_model_background, daemon=True).start()
 
 @app.route('/health', methods=['GET'])
 def health_check():

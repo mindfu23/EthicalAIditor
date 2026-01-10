@@ -4,7 +4,9 @@
 [build]
   command = "npm run build"
   publish = "dist"
-  # No Netlify functions - we use Cloudflare Workers for the backend
+
+[functions]
+  directory = "netlify/functions"
 
 # Environment variables (set actual values in Netlify dashboard)
 [build.environment]
@@ -14,6 +16,7 @@
   SECRETS_SCAN_OMIT_KEYS = "VITE_CLOUDFLARE_WORKER_URL"
 
 # SPA redirect - all routes to index.html for client-side routing
+# Note: Netlify Functions take precedence over redirects
 [[redirects]]
   from = "/*"
   to = "/index.html"

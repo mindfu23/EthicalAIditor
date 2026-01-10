@@ -2,8 +2,9 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     
-    // VM URL (HTTP - Worker can call HTTP, browsers can't from HTTPS)
-    const VM_URL = 'http://34.30.2.20:8080';
+    // VM URL (try HTTPS with self-signed cert first)
+    const VM_URL = 'https://34.30.2.20';
+    const VM_URL_HTTP = 'http://34.30.2.20:8080';
     // Cloud Run URL (HTTPS fallback)
     const CLOUD_RUN_URL = env.LLM_API_URL || 'https://llm-api-1097587800570.us-central1.run.app';
     
@@ -21,6 +22,56 @@ export default {
     // Health check
     if (url.pathname === '/api/health') {
       return new Response(JSON.stringify({ status: 'ok', timestamp: new Date().toISOString() }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    }
+
+    // Debug endpoint - test VM connectivity
+    if (url.pathname === '/api/debug/vm') {
+      const results = {};
+      
+      // Test HTTP with timeout using AbortController
+      const controller1 = new AbortController();
+      const timeout1 = setTimeout(() => controller1.abort(), 5000);
+      try {
+        const start1 = Date.now();
+        const r1 = await fetch('http://34.30.2.20:8080/health', { signal: controller1.signal });
+        clearTimeout(timeout1);
+        const text = await r1.text();
+        results.http_8080 = { ok: r1.ok, status: r1.status, time: Date.now() - start1, body: text.slice(0, 100) };
+      } catch (e) {
+        clearTimeout(timeout1);
+        results.http_8080 = { error: e.message, name: e.name };
+      }
+      
+      // Test HTTPS to Cloud Run (known working)
+      const controller2 = new AbortController();
+      const timeout2 = setTimeout(() => controller2.abort(), 5000);
+      try {
+        const start2 = Date.now();
+        const r2 = await fetch(CLOUD_RUN_URL + '/health', { signal: controller2.signal });
+        clearTimeout(timeout2);
+        const text = await r2.text();
+        results.cloud_run = { ok: r2.ok, status: r2.status, time: Date.now() - start2, body: text.slice(0, 100) };
+      } catch (e) {
+        clearTimeout(timeout2);
+        results.cloud_run = { error: e.message, name: e.name };
+      }
+      
+      // Test external HTTP to verify HTTP works at all
+      const controller3 = new AbortController();
+      const timeout3 = setTimeout(() => controller3.abort(), 5000);
+      try {
+        const start3 = Date.now();
+        const r3 = await fetch('http://httpbin.org/get', { signal: controller3.signal });
+        clearTimeout(timeout3);
+        results.httpbin = { ok: r3.ok, status: r3.status, time: Date.now() - start3 };
+      } catch (e) {
+        clearTimeout(timeout3);
+        results.httpbin = { error: e.message, name: e.name };
+      }
+      
+      return new Response(JSON.stringify(results, null, 2), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
     }
@@ -51,36 +102,13 @@ export default {
       });
     }
 
-    // VM proxy endpoint - try VM first, then fallback to Cloud Run
+    // VM proxy endpoint - since Workers can't reach IPs directly, just use Cloud Run
+    // (kept for backwards compatibility with frontend)
     if (url.pathname === '/api/vm/chat' && request.method === 'POST') {
       try {
         const body = await request.json();
-        console.log('[VM Proxy] Trying VM first...');
+        console.log('[VM Proxy] Using Cloud Run (VM blocked by Cloudflare IP restrictions)');
         
-        // Try VM first (always on, no cold start)
-        try {
-          const vmResponse = await fetch(`${VM_URL}/chat`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
-          });
-          
-          if (vmResponse.ok) {
-            const data = await vmResponse.json();
-            console.log('[VM Proxy] VM responded successfully');
-            return new Response(JSON.stringify({
-              text: data.response || data.text || '',
-              source: 'vm'
-            }), {
-              headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-            });
-          }
-        } catch (vmError) {
-          console.log('[VM Proxy] VM failed, trying Cloud Run:', vmError.message);
-        }
-        
-        // Fallback to Cloud Run
-        console.log('[VM Proxy] Falling back to Cloud Run...');
         const cloudResponse = await fetch(`${CLOUD_RUN_URL}/chat`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
