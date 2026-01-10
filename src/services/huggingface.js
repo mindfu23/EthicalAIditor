@@ -67,8 +67,32 @@ export const chatWithLLM = async (messages, manuscriptContext = '', model = null
   const userMessage = messages.map(m => `${m.role}: ${m.content}`).join('\n');
   const prompt = contextPrefix + userMessage;
 
-  // Try Netlify Function VM proxy first (Netlify can call HTTP endpoints)
-  // Note: Netlify free tier has 10s timeout, so we use a short max_tokens
+  // Try Cloud Run first (HTTPS, longer timeout, handles cold starts)
+  try {
+    console.log('[Chat] Calling Cloud Run...');
+    const response = await fetch(`${CLOUD_RUN_URL}/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messages,
+        model: selectedModel,
+        manuscriptContext: manuscriptContext?.substring(0, 1000),
+      }),
+    });
+
+    if (response.ok) {
+      const result = await response.json();
+      console.log('[Chat] Cloud Run response received');
+      return result.text || result.response || '';
+    }
+    
+    const err = await response.json().catch(() => ({}));
+    console.error('[Chat] Cloud Run error:', err);
+  } catch (error) {
+    console.error('[Chat] Cloud Run failed, trying Netlify Function:', error);
+  }
+
+  // Fallback: Try Netlify Function VM proxy (10s timeout on free tier)
   try {
     console.log('[Chat] Calling VM via Netlify Function...');
     const response = await fetch(NETLIFY_VM_ENDPOINT, {
@@ -76,7 +100,7 @@ export const chatWithLLM = async (messages, manuscriptContext = '', model = null
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         prompt,
-        max_tokens: 150,  // Keep short for faster response
+        max_tokens: 100,  // Very short for 10s timeout
         temperature: 0.7,
       }),
     });
@@ -90,68 +114,41 @@ export const chatWithLLM = async (messages, manuscriptContext = '', model = null
     const err = await response.json().catch(() => ({}));
     console.error('[Chat] Netlify Function error:', err);
   } catch (error) {
-    console.error('[Chat] Netlify Function failed, trying Cloud Run:', error);
+    console.error('[Chat] Netlify Function failed:', error);
   }
 
-  // Fallback: Direct Cloud Run call
-  try {
-    console.log('[Chat] Calling Cloud Run directly...');
-    const response = await fetch(`${CLOUD_RUN_URL}/chat`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        messages,
-        model: selectedModel,
-        manuscriptContext: manuscriptContext?.substring(0, 3000),
-      }),
-    });
+  // Final fallback: Cloudflare Worker
+  if (API_BASE) {
+    try {
+      console.log('[Chat] Trying Cloudflare Worker fallback...');
+      const response = await fetch(`${API_BASE}/api/huggingface`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          messages,
+          model: selectedModel,
+          manuscriptContext: manuscriptContext?.substring(0, 1000),
+        }),
+      });
 
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      console.error('[Chat] Cloud Run error:', err);
-      throw new Error(err.error || `Cloud Run error: ${response.status}`);
-    }
-
-    const result = await response.json();
-    console.log('[Chat] Cloud Run response received');
-    return result.text || result.response || '';
-  } catch (error) {
-    console.error('[Chat] Cloud Run failed:', error);
-    
-    // Fallback to Cloudflare Worker
-    if (API_BASE) {
-      try {
-        console.log('[Chat] Trying Cloudflare Worker fallback...');
-        const response = await fetch(`${API_BASE}/api/huggingface`, {
-          method: 'POST',
-          headers: getAuthHeaders(),
-          body: JSON.stringify({
-            messages,
-            model: selectedModel,
-            manuscriptContext: manuscriptContext?.substring(0, 3000),
-          }),
-        });
-
-        if (!response.ok) {
-          const err = await response.json();
-          if (response.status === 429) {
-            throw new Error(`Rate limit exceeded. ${err.error || 'Please sign up for more requests or wait until tomorrow.'}`);
-          }
-          throw new Error(err.error || `API error: ${response.status}`);
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        if (response.status === 429) {
+          throw new Error(`Rate limit exceeded. ${err.error || 'Please sign up for more requests or wait until tomorrow.'}`);
         }
-
-        const result = await response.json();
-        return result.text || '';
-      } catch (workerError) {
-        console.error('[Chat] Worker fallback also failed:', workerError);
-        throw workerError;
+        console.error('[Chat] Worker fallback error:', err);
+        throw new Error(err.error || `API error: ${response.status}`);
       }
+
+      const result = await response.json();
+      return result.text || '';
+    } catch (workerError) {
+      console.error('[Chat] Worker fallback also failed:', workerError);
     }
-    
-    throw error;
   }
+  
+  // All fallbacks failed
+  throw new Error('AI service temporarily unavailable. Please try again.');
 };
 
 /**
