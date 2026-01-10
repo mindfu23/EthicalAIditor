@@ -60,15 +60,23 @@ export const chatWithLLM = async (messages, manuscriptContext = '', model = null
     return directHuggingFaceCall(messages, selectedModel, apiKey, manuscriptContext);
   }
 
+  // Build prompt with truncated context to stay under token limits
+  const contextPrefix = manuscriptContext 
+    ? `Context from manuscript: ${manuscriptContext.substring(0, 500)}\n\n`
+    : '';
+  const userMessage = messages.map(m => `${m.role}: ${m.content}`).join('\n');
+  const prompt = contextPrefix + userMessage;
+
   // Try Netlify Function VM proxy first (Netlify can call HTTP endpoints)
+  // Note: Netlify free tier has 10s timeout, so we use a short max_tokens
   try {
     console.log('[Chat] Calling VM via Netlify Function...');
     const response = await fetch(NETLIFY_VM_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        prompt: messages.map(m => `${m.role}: ${m.content}`).join('\n'),
-        max_tokens: 500,
+        prompt,
+        max_tokens: 150,  // Keep short for faster response
         temperature: 0.7,
       }),
     });

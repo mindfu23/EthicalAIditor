@@ -218,14 +218,20 @@ def chat():
         
         logger.info(f"Chat request, prompt length: {len(full_prompt)}")
         
-        # Tokenize input
-        inputs = current_tokenizer(full_prompt, return_tensors="pt")
+        # Tokenize input with truncation to avoid exceeding model limits
+        inputs = current_tokenizer(
+            full_prompt, 
+            return_tensors="pt",
+            truncation=True,
+            max_length=400  # Leave room for generation
+        )
         
-        # Generate
+        # Generate using max_new_tokens (not max_length) to avoid input > output length errors
         with torch.no_grad():
             outputs = current_model.generate(
                 inputs.input_ids,
-                max_length=500,
+                attention_mask=inputs.attention_mask,
+                max_new_tokens=200,
                 temperature=0.7,
                 do_sample=True,
                 pad_token_id=current_tokenizer.eos_token_id

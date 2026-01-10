@@ -73,7 +73,13 @@ def chat():
         return jsonify({"error": "No prompt provided"}), 400
     
     try:
-        inputs = tokenizer(prompt, return_tensors="pt")
+        # Truncate long inputs to avoid exceeding model limits
+        inputs = tokenizer(
+            prompt, 
+            return_tensors="pt",
+            truncation=True,
+            max_length=400  # Leave room for generation
+        )
         # Only pass input_ids and attention_mask to generate (not token_type_ids)
         input_ids = inputs["input_ids"]
         attention_mask = inputs.get("attention_mask")
