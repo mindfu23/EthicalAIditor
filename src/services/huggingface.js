@@ -13,6 +13,9 @@ const NETLIFY_VM_ENDPOINT = '/.netlify/functions/vm-chat';
 const CLOUD_RUN_URL = 'https://llm-api-1097587800570.us-central1.run.app';
 const DEFAULT_MODEL = 'PleIAs/Pleias-1.2b-Preview';
 
+// Check if fetch is available (should be in all modern browsers and Node 18+)
+const fetchFn = typeof fetch !== 'undefined' ? fetch : null;
+
 /**
  * Get auth headers from local storage
  */
