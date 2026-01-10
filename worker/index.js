@@ -8,10 +8,23 @@ export default {
     // Cloud Run URL (HTTPS fallback)
     const CLOUD_RUN_URL = env.LLM_API_URL || 'https://llm-api-1097587800570.us-central1.run.app';
     
+    // Smart CORS - allow production and localhost for development
+    const ALLOWED_ORIGINS = [
+      'https://ethicalaiditor.netlify.app',
+      'http://localhost:5173',
+      'http://localhost:3000',
+      'http://127.0.0.1:5173',
+      'http://127.0.0.1:3000',
+    ];
+    
+    const origin = request.headers.get('Origin');
+    const allowedOrigin = ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
+    
     const corsHeaders = {
-      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Origin': allowedOrigin,
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-User-Id',
+      'Vary': 'Origin', // Important for caching with dynamic CORS
     };
 
     // Handle CORS preflight
