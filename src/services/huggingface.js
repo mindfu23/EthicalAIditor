@@ -131,8 +131,9 @@ export const chatWithLLM = async (messages, manuscriptContext = '', model = null
   }
 
   // Build prompt with truncated context to stay under token limits
+  // Use 2000 chars for better context (about 500 tokens)
   const contextPrefix = manuscriptContext 
-    ? `Context from manuscript: ${manuscriptContext.substring(0, 500)}\n\n`
+    ? `Context from manuscript:\n---\n${manuscriptContext.substring(0, 2000)}\n---\n\n`
     : '';
   const userMessage = messages.map(m => `${m.role}: ${m.content}`).join('\n');
   const prompt = contextPrefix + userMessage;
@@ -146,7 +147,7 @@ export const chatWithLLM = async (messages, manuscriptContext = '', model = null
       body: JSON.stringify({
         messages,
         model: selectedModel,
-        manuscriptContext: manuscriptContext?.substring(0, 1000),
+        manuscriptContext: manuscriptContext?.substring(0, 2000),
       }),
     });
 
@@ -197,7 +198,7 @@ export const chatWithLLM = async (messages, manuscriptContext = '', model = null
         body: JSON.stringify({
           messages,
           model: selectedModel,
-          manuscriptContext: manuscriptContext?.substring(0, 1000),
+          manuscriptContext: manuscriptContext?.substring(0, 2000),
         }),
       });
 

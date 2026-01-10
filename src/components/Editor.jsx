@@ -1,11 +1,12 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Upload, Send, Settings, FileText, MessageSquare, Save, User, LogOut, X, Loader2, Zap, CheckCircle, AlertCircle } from 'lucide-react';
+import { Upload, Send, Settings, FileText, MessageSquare, Save, User, LogOut, X, Loader2, Zap, CheckCircle, AlertCircle, Download, FolderOpen, Edit2, Check } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { getUsageStats, chatWithLLM, getEstimatedResponseTime } from '../services/huggingface';
 import { useAuth } from '../lib/auth';
 import { ModelSelector, useSelectedModel } from './ModelSelector';
-import { saveManuscript, loadManuscript, getAllManuscripts } from '../lib/storage/manuscript-store';
+import { saveManuscript, loadManuscript, getAllManuscripts, deleteManuscript } from '../lib/storage/manuscript-store';
 import { initWarmup, subscribeToStatus, ServiceStatus, warmupService } from '../services/warmup';
+import { parseFile, SUPPORTED_EXTENSIONS, getWordCount } from '../lib/file-parser';
 
 const API_BASE = import.meta.env.VITE_CLOUDFLARE_WORKER_URL || '';
 
@@ -35,8 +36,24 @@ export default function Editor() {
   const [elapsedTime, setElapsedTime] = useState(0);
   const [estimatedTime, setEstimatedTime] = useState(45000);
   
+  // Recent documents panel
+  const [showRecentDocs, setShowRecentDocs] = useState(false);
+  const [recentDocs, setRecentDocs] = useState([]);
+  
+  // Title editing
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [editingTitleValue, setEditingTitleValue] = useState('');
+  
+  // File parsing status
+  const [parseError, setParseError] = useState(null);
+  const [isParsing, setIsParsing] = useState(false);
+  
+  // Text selection for focused AI review
+  const [selectedText, setSelectedText] = useState('');
+  
   const fileInputRef = useRef(null);
   const messagesEndRef = useRef(null);
+  const titleInputRef = useRef(null);
 
   // Generate unique ID for messages
   const generateId = () => `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -47,6 +64,19 @@ export default function Editor() {
     const unsubscribe = subscribeToStatus(setServiceStatus);
     return unsubscribe;
   }, []);
+
+  // Load recent documents on mount
+  useEffect(() => {
+    getAllManuscripts().then(setRecentDocs).catch(console.error);
+  }, []);
+
+  // Focus title input when editing
+  useEffect(() => {
+    if (isEditingTitle && titleInputRef.current) {
+      titleInputRef.current.focus();
+      titleInputRef.current.select();
+    }
+  }, [isEditingTitle]);
 
   // Auto-scroll chat
   useEffect(() => {
@@ -83,22 +113,105 @@ export default function Editor() {
     }
   }, [manuscript, fileName, messages, manuscriptId]);
 
-  const handleFileUpload = (e) => {
+  // Refresh recent docs list after save
+  const refreshRecentDocs = useCallback(() => {
+    getAllManuscripts().then(setRecentDocs).catch(console.error);
+  }, []);
+
+  const handleFileUpload = async (e) => {
     const file = e.target.files[0];
-    if (file) {
+    if (!file) return;
+    
+    setParseError(null);
+    setIsParsing(true);
+    
+    try {
+      const { text, type } = await parseFile(file);
+      const wordCount = getWordCount(text);
+      
       setFileName(file.name);
       setManuscriptId(null); // New manuscript
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        setManuscript(e.target.result);
-        // Add a system message about the upload
-        setMessages(prev => [...prev, { 
-          id: generateId(),
-          role: 'assistant', 
-          content: `File "${file.name}" uploaded. I can now see your manuscript and help you with it. What would you like to discuss?` 
-        }]);
-      };
-      reader.readAsText(file);
+      setManuscript(text);
+      
+      // Add a system message about the upload
+      setMessages(prev => [...prev, { 
+        id: generateId(),
+        role: 'assistant', 
+        content: `File "${file.name}" uploaded (${wordCount.toLocaleString()} words, ${type} format). I can now see your manuscript and help you with it. What would you like to discuss?` 
+      }]);
+      
+      // Refresh recent docs after a moment (after auto-save triggers)
+      setTimeout(refreshRecentDocs, 3000);
+    } catch (error) {
+      setParseError(error.message);
+      console.error('File parse error:', error);
+    } finally {
+      setIsParsing(false);
+    }
+  };
+
+  // Handle loading a recent document
+  const handleLoadDocument = async (doc) => {
+    setManuscript(doc.content);
+    setFileName(doc.title);
+    setManuscriptId(doc.id);
+    setMessages(doc.messages || []);
+    setShowRecentDocs(false);
+  };
+
+  // Handle deleting a document
+  const handleDeleteDocument = async (docId, e) => {
+    e.stopPropagation();
+    if (confirm('Delete this manuscript? This cannot be undone.')) {
+      await deleteManuscript(docId);
+      refreshRecentDocs();
+      if (manuscriptId === docId) {
+        setManuscript('');
+        setFileName('');
+        setManuscriptId(null);
+        setMessages([]);
+      }
+    }
+  };
+
+  // Handle downloading the manuscript
+  const handleDownload = () => {
+    const blob = new Blob([manuscript], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName || 'manuscript.txt';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  // Handle title editing
+  const startEditingTitle = () => {
+    setEditingTitleValue(fileName || 'Untitled Manuscript');
+    setIsEditingTitle(true);
+  };
+
+  const saveTitle = () => {
+    const newTitle = editingTitleValue.trim() || 'Untitled Manuscript';
+    setFileName(newTitle);
+    setIsEditingTitle(false);
+  };
+
+  const cancelEditingTitle = () => {
+    setIsEditingTitle(false);
+  };
+
+  // Handle text selection in the textarea
+  const handleTextSelection = () => {
+    const textarea = document.querySelector('textarea');
+    if (textarea) {
+      const selected = textarea.value.substring(
+        textarea.selectionStart,
+        textarea.selectionEnd
+      );
+      setSelectedText(selected);
     }
   };
 
@@ -127,15 +240,21 @@ export default function Editor() {
     setEstimatedTime(getEstimatedResponseTime());
 
     try {
+      // Use selected text if available, otherwise use full manuscript
+      const contextToSend = selectedText.trim() || manuscript;
+      
       const response = await chatWithLLM(
         [...messages, userMessage].map(m => ({ role: m.role, content: m.content })),
-        manuscript,
+        contextToSend,
         selectedModel,
         (elapsed, estimated) => {
           setElapsedTime(elapsed);
           setEstimatedTime(estimated);
         }
       );
+      
+      // Clear selected text after using it
+      setSelectedText('');
       
       setMessages(prev => [...prev, { 
         id: generateId(), 
@@ -223,31 +342,142 @@ export default function Editor() {
         {/* Manuscript Editor */}
         <div className="flex-1 flex flex-col border-r border-gray-200 bg-white">
           <div className="h-14 border-b border-gray-200 flex items-center justify-between px-4 bg-gray-50">
-            <h2 className="font-semibold text-gray-700 truncate">
-              {fileName || 'Untitled Manuscript'}
-            </h2>
+            {/* Editable Title */}
+            {isEditingTitle ? (
+              <div className="flex items-center gap-2">
+                <input
+                  ref={titleInputRef}
+                  type="text"
+                  value={editingTitleValue}
+                  onChange={(e) => setEditingTitleValue(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') saveTitle();
+                    if (e.key === 'Escape') cancelEditingTitle();
+                  }}
+                  onBlur={saveTitle}
+                  className="font-semibold text-gray-700 border border-blue-400 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <button onClick={saveTitle} className="text-green-600 hover:text-green-700">
+                  <Check size={16} />
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 cursor-pointer group" onClick={startEditingTitle}>
+                <h2 className="font-semibold text-gray-700 truncate">
+                  {fileName || 'Untitled Manuscript'}
+                </h2>
+                <Edit2 size={14} className="text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity" />
+              </div>
+            )}
+            
+            {/* Word Count */}
+            {manuscript && (
+              <span className="text-xs text-gray-500 mx-2">
+                {getWordCount(manuscript).toLocaleString()} words
+              </span>
+            )}
+            
             <div className="flex items-center space-x-2">
+              {/* Recent Documents Button */}
+              <button 
+                onClick={() => setShowRecentDocs(!showRecentDocs)}
+                className="flex items-center px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-200 rounded-md transition-colors"
+                title="Recent Documents"
+              >
+                <FolderOpen size={16} className="mr-2" />
+                Recent
+              </button>
+              
+              {/* Upload Button */}
               <button 
                 onClick={() => fileInputRef.current.click()}
                 className="flex items-center px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-200 rounded-md transition-colors"
+                disabled={isParsing}
               >
-                <Upload size={16} className="mr-2" />
+                {isParsing ? (
+                  <Loader2 size={16} className="mr-2 animate-spin" />
+                ) : (
+                  <Upload size={16} className="mr-2" />
+                )}
                 Upload
               </button>
+              
+              {/* Download Button */}
+              {manuscript && (
+                <button 
+                  onClick={handleDownload}
+                  className="flex items-center px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-200 rounded-md transition-colors"
+                  title="Download manuscript"
+                >
+                  <Download size={16} className="mr-2" />
+                  Download
+                </button>
+              )}
+              
               <input 
                 type="file" 
                 ref={fileInputRef} 
                 onChange={handleFileUpload} 
                 className="hidden" 
-                accept=".txt,.md"
+                accept={SUPPORTED_EXTENSIONS}
               />
             </div>
           </div>
+          
+          {/* Parse Error Message */}
+          {parseError && (
+            <div className="bg-red-50 border-b border-red-200 px-4 py-2 flex items-center justify-between">
+              <span className="text-sm text-red-700">{parseError}</span>
+              <button onClick={() => setParseError(null)} className="text-red-500 hover:text-red-700">
+                <X size={14} />
+              </button>
+            </div>
+          )}
+          
+          {/* Recent Documents Panel */}
+          {showRecentDocs && (
+            <div className="bg-white border-b border-gray-200 max-h-64 overflow-y-auto">
+              <div className="p-2">
+                <h3 className="text-xs font-semibold text-gray-500 uppercase mb-2 px-2">Recent Documents</h3>
+                {recentDocs.length === 0 ? (
+                  <p className="text-sm text-gray-500 px-2 py-4 text-center">No saved documents yet</p>
+                ) : (
+                  <ul className="space-y-1">
+                    {recentDocs.map(doc => (
+                      <li 
+                        key={doc.id}
+                        onClick={() => handleLoadDocument(doc)}
+                        className={`flex items-center justify-between px-3 py-2 rounded-md cursor-pointer hover:bg-gray-100 ${
+                          manuscriptId === doc.id ? 'bg-blue-50 border border-blue-200' : ''
+                        }`}
+                      >
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-gray-800 truncate">{doc.title || 'Untitled'}</p>
+                          <p className="text-xs text-gray-500">
+                            {new Date(doc.updatedAt).toLocaleDateString()} · {Math.round(doc.size / 1000)}k chars
+                          </p>
+                        </div>
+                        <button 
+                          onClick={(e) => handleDeleteDocument(doc.id, e)}
+                          className="ml-2 text-gray-400 hover:text-red-500 p-1"
+                          title="Delete"
+                        >
+                          <X size={14} />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+          )}
+          
           <textarea
             value={manuscript}
             onChange={(e) => setManuscript(e.target.value)}
+            onSelect={handleTextSelection}
             className="flex-1 p-8 resize-none focus:outline-none font-serif text-lg leading-relaxed text-gray-800"
-            placeholder="Paste your text here or upload a file..."
+            placeholder="Paste your text here or upload a file (.txt, .md, .docx, .pdf)..."
           />
         </div>
 
@@ -395,12 +625,26 @@ export default function Editor() {
           </div>
 
           <div className="p-4 border-t border-gray-200 bg-white">
+            {/* Selected Text Indicator */}
+            {selectedText && (
+              <div className="mb-2 flex items-center justify-between bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-sm">
+                <span className="text-blue-700">
+                  📝 Using selected text ({selectedText.length} chars) for context
+                </span>
+                <button 
+                  onClick={() => setSelectedText('')}
+                  className="text-blue-500 hover:text-blue-700"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            )}
             <form onSubmit={onSubmit} className="flex items-center space-x-2">
               <input
                 type="text"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                placeholder="Ask about your text..."
+                placeholder={selectedText ? "Ask about selected text..." : "Ask about your text..."}
                 className="flex-1 border border-gray-300 rounded-full px-4 py-2 text-sm focus:outline-none focus:border-blue-500"
                 disabled={!apiConfigured}
               />
