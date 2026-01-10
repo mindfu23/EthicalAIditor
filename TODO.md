@@ -146,6 +146,138 @@ When ready to support all platforms, add to package.json:
 
 ---
 
+## Mobile Apps (iOS & Android) - READY FOR DEVELOPMENT
+
+Mobile app infrastructure has been added with local LLM inference support via Capacitor.
+
+### Files Added:
+- `src/services/mobile-llm.js` - Mobile-specific LLM service with:
+  - Model download to device storage
+  - Local inference via llama.cpp native plugin
+  - Device RAM detection for model recommendations
+  - Offline-capable operation
+- `capacitor.config.ts` - Updated with mobile-specific settings
+
+### Updated Files:
+- `src/services/local-llm.js` - Now supports iOS/Android via unified API
+- `src/services/huggingface.js` - Platform-aware inference routing
+- `package.json` - Added Capacitor dependencies and mobile scripts
+
+### Mobile-Compatible Models
+
+| Model | Size | RAM Needed | All Phones? | Notes |
+|-------|------|------------|-------------|-------|
+| **PleIAs 350M** | 200MB | 1GB | ✅ Yes | Recommended default |
+| Llama 3.2 1B | 600MB | 2GB | ✅ Yes | Good quality |
+| Llama 3.2 3B | 1.8GB | 4GB | ⚠️ 6GB+ phones | High-end only |
+
+### Setup Commands:
+
+```bash
+# 1. Install dependencies
+npm install
+
+# 2. Add iOS platform (requires Mac with Xcode)
+npm run cap:add:ios
+
+# 3. Add Android platform (requires Android Studio)
+npm run cap:add:android
+
+# 4. Build and sync to platforms
+npm run cap:sync
+
+# 5. Open in Xcode for iOS development
+npm run cap:open:ios
+
+# 6. Open in Android Studio for Android development
+npm run cap:open:android
+```
+
+### iOS Development Requirements
+
+| Requirement | Details | Cost |
+|-------------|---------|------|
+| Mac computer | Required for iOS development | — |
+| Xcode | From Mac App Store | Free |
+| Apple Developer Account | For App Store distribution | $99/year |
+| Physical iPhone | For testing (simulator works too) | — |
+
+**Critical: llama.cpp Native Plugin**
+
+The `@anthropic/capacitor-llama` plugin referenced in mobile-llm.js needs to be:
+1. Built from llama.cpp source for iOS/Android
+2. Or use an existing Capacitor llama.cpp wrapper
+
+**Options:**
+- Build custom plugin using llama.cpp iOS/Android bindings
+- Use `capacitor-llama-cpp` if available
+- Fork and modify existing llama.cpp mobile implementations
+
+### Android Development Requirements
+
+| Requirement | Details | Cost |
+|-------------|---------|------|
+| Android Studio | IDE for Android | Free |
+| JDK 17+ | Required by Android Studio | Free |
+| Android SDK | Installed via Android Studio | Free |
+| Google Play Developer | For Play Store distribution | $25 one-time |
+
+### Remaining Mobile Tasks:
+
+**iOS:**
+- [ ] Install and configure llama.cpp Capacitor plugin
+- [ ] Test model download on iOS Simulator
+- [ ] Test local inference on physical iPhone
+- [ ] Create app icons (1024x1024 for App Store)
+- [ ] Configure App Store Connect
+- [ ] Submit for TestFlight beta testing
+
+**Android:**
+- [ ] Install and configure llama.cpp Capacitor plugin
+- [ ] Test model download on Android Emulator
+- [ ] Test local inference on physical Android device
+- [ ] Create app icons (512x512 for Play Store)
+- [ ] Configure Google Play Console
+- [ ] Submit for internal testing track
+
+### Mobile Architecture
+
+```
+┌─────────────────────────────────────────────────┐
+│  User opens app                                 │
+├─────────────────────────────────────────────────┤
+│                                                 │
+│  First launch:                                  │
+│  └─> Show "Download Model" prompt              │
+│      └─> Download PleIAs 350M (200MB)          │
+│          └─> Save to app's private storage     │
+│                                                 │
+│  Subsequent launches:                           │
+│  └─> Load model from local storage             │
+│      └─> Ready for instant inference           │
+│                                                 │
+│  Inference:                                     │
+│  └─> User types prompt                         │
+│      └─> Call llama.cpp native plugin          │
+│          └─> Get response in 2-5 seconds       │
+│                                                 │
+│  Fallback (if online):                          │
+│  └─> Can still use Cloud API if preferred      │
+│                                                 │
+└─────────────────────────────────────────────────┘
+```
+
+### Cost Summary for Mobile
+
+| Item | One-time | Annual |
+|------|----------|--------|
+| Apple Developer (iOS) | — | $99 |
+| Google Play Developer | $25 | — |
+| **Total Year 1** | **$25** | **$99** |
+| **Total Year 2+** | — | **$99** |
+
+---
+
 ## Cold Start Indicator Component (To Be Integrated)
 
 A cold start indicator component has been created to show users when the LLM API is waking up from idle state. This needs to be integrated into the chat/main component.

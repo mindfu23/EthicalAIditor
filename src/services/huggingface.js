@@ -6,9 +6,17 @@
  * Supports PleIAs ethical AI models trained on Common Corpus.
  * 
  * Desktop (Electron): Can use local llama.cpp inference for instant, offline responses.
+ * Mobile (iOS/Android): Can use local llama.cpp via Capacitor plugin for offline use.
  */
 
-import { isElectron, generateLocal } from './local-llm.js';
+import { 
+  isElectron, 
+  isMobile, 
+  generateLocal, 
+  isLocalInferenceAvailable as checkLocalAvailable,
+  Platform,
+  getPlatform
+} from './local-llm.js';
 
 const API_BASE = import.meta.env.VITE_CLOUDFLARE_WORKER_URL || '';
 // Netlify Function to proxy to VM (Netlify can call HTTP, unlike Cloudflare Workers)
@@ -17,7 +25,7 @@ const NETLIFY_VM_ENDPOINT = '/.netlify/functions/vm-chat';
 const CLOUD_RUN_URL = 'https://llm-api-1097587800570.us-central1.run.app';
 const DEFAULT_MODEL = 'PleIAs/Pleias-1.2b-Preview';
 
-// Inference mode: 'cloud' (default) or 'local' (Electron only)
+// Inference mode: 'cloud' (default) or 'local' (desktop/mobile only)
 export const InferenceMode = {
   CLOUD: 'cloud',
   LOCAL: 'local'
@@ -27,7 +35,7 @@ export const InferenceMode = {
  * Get current inference mode from settings
  */
 export function getInferenceMode() {
-  if (!isElectron()) return InferenceMode.CLOUD;
+  if (!checkLocalAvailable()) return InferenceMode.CLOUD;
   return localStorage.getItem('ethicalaiditor_inference_mode') || InferenceMode.CLOUD;
 }
 
@@ -39,10 +47,30 @@ export function setInferenceMode(mode) {
 }
 
 /**
- * Check if local inference is available
+ * Check if local inference is available (desktop or mobile)
  */
 export function isLocalInferenceAvailable() {
-  return isElectron();
+  return checkLocalAvailable();
+}
+
+/**
+ * Get current platform info for UI
+ */
+export function getPlatformInfo() {
+  const platform = getPlatform();
+  return {
+    platform,
+    isDesktop: platform === Platform.ELECTRON,
+    isMobile: platform === Platform.IOS || platform === Platform.ANDROID,
+    isWeb: platform === Platform.WEB,
+    supportsLocalInference: platform !== Platform.WEB,
+    platformName: {
+      [Platform.WEB]: 'Web Browser',
+      [Platform.ELECTRON]: 'Mac Desktop',
+      [Platform.IOS]: 'iOS',
+      [Platform.ANDROID]: 'Android'
+    }[platform]
+  };
 }
 
 // Average response time tracking (for estimating wait times)
@@ -125,9 +153,11 @@ function getSelectedModel() {
  * @returns {Promise<string>} - Generated text response
  */
 export const chatWithLLM = async (messages, manuscriptContext = '', model = null, onProgress = null) => {
-  // Check if using local inference (Electron desktop app)
+  // Check if using local inference (Electron desktop app or mobile)
   const inferenceMode = getInferenceMode();
-  if (inferenceMode === InferenceMode.LOCAL && isElectron()) {
+  const localAvailable = checkLocalAvailable();
+  
+  if (inferenceMode === InferenceMode.LOCAL && localAvailable) {
     return chatWithLocalLLM(messages, manuscriptContext, onProgress);
   }
   
