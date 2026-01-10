@@ -7,11 +7,9 @@
  */
 
 const API_BASE = import.meta.env.VITE_CLOUDFLARE_WORKER_URL || '';
-// VM URL - disabled for now due to mixed content (HTTPS site can't call HTTP)
-// To enable: set up nginx + Let's Encrypt on VM, then uncomment
-// const VM_URL = 'http://34.30.2.20:8080';
-const VM_URL = null; // Disabled until HTTPS is configured
-// Primary: Cloud Run (has HTTPS, but 30-45s cold start)
+// VM is proxied through Cloudflare Worker (Worker calls HTTP VM, browser gets HTTPS)
+const WORKER_VM_ENDPOINT = `${API_BASE}/api/vm/chat`;
+// Direct Cloud Run (HTTPS, has cold start)
 const CLOUD_RUN_URL = 'https://llm-api-1097587800570.us-central1.run.app';
 const DEFAULT_MODEL = 'PleIAs/Pleias-1.2b-Preview';
 
@@ -59,13 +57,11 @@ export const chatWithLLM = async (messages, manuscriptContext = '', model = null
     return directHuggingFaceCall(messages, selectedModel, apiKey, manuscriptContext);
   }
 
-  // VM is disabled due to mixed content (HTTPS->HTTP blocked by browser)
-  // When VM has HTTPS, uncomment this block:
-  /*
-  if (VM_URL) {
+  // Try Worker VM proxy first (Worker calls HTTP VM, no mixed content issue)
+  if (API_BASE) {
     try {
-      console.log('[Chat] Calling Compute Engine VM...');
-      const response = await fetch(`${VM_URL}/chat`, {
+      console.log('[Chat] Calling VM via Worker proxy...');
+      const response = await fetch(WORKER_VM_ENDPOINT, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -77,18 +73,20 @@ export const chatWithLLM = async (messages, manuscriptContext = '', model = null
 
       if (response.ok) {
         const result = await response.json();
-        console.log('[Chat] VM response received');
-        return result.response || '';
+        console.log('[Chat] Response received from:', result.source);
+        return result.text || '';
       }
+      
+      const err = await response.json().catch(() => ({}));
+      console.error('[Chat] Worker proxy error:', err);
     } catch (error) {
-      console.error('[Chat] VM failed, trying Cloud Run:', error);
+      console.error('[Chat] Worker proxy failed, trying direct Cloud Run:', error);
     }
   }
-  */
 
-  // Use Cloud Run (has HTTPS, works from browser)
+  // Fallback: Direct Cloud Run call
   try {
-    console.log('[Chat] Calling Cloud Run...');
+    console.log('[Chat] Calling Cloud Run directly...');
     const response = await fetch(`${CLOUD_RUN_URL}/chat`, {
       method: 'POST',
       headers: {

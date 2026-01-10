@@ -2,6 +2,11 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     
+    // VM URL (HTTP - Worker can call HTTP, browsers can't from HTTPS)
+    const VM_URL = 'http://34.30.2.20:8080';
+    // Cloud Run URL (HTTPS fallback)
+    const CLOUD_RUN_URL = env.LLM_API_URL || 'https://llm-api-1097587800570.us-central1.run.app';
+    
     const corsHeaders = {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
@@ -44,6 +49,63 @@ export default {
       }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
+    }
+
+    // VM proxy endpoint - try VM first, then fallback to Cloud Run
+    if (url.pathname === '/api/vm/chat' && request.method === 'POST') {
+      try {
+        const body = await request.json();
+        console.log('[VM Proxy] Trying VM first...');
+        
+        // Try VM first (always on, no cold start)
+        try {
+          const vmResponse = await fetch(`${VM_URL}/chat`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+          });
+          
+          if (vmResponse.ok) {
+            const data = await vmResponse.json();
+            console.log('[VM Proxy] VM responded successfully');
+            return new Response(JSON.stringify({
+              text: data.response || data.text || '',
+              source: 'vm'
+            }), {
+              headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+            });
+          }
+        } catch (vmError) {
+          console.log('[VM Proxy] VM failed, trying Cloud Run:', vmError.message);
+        }
+        
+        // Fallback to Cloud Run
+        console.log('[VM Proxy] Falling back to Cloud Run...');
+        const cloudResponse = await fetch(`${CLOUD_RUN_URL}/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        
+        const data = await cloudResponse.json();
+        return new Response(JSON.stringify({
+          text: data.text || data.response || '',
+          source: 'cloud_run'
+        }), {
+          status: cloudResponse.ok ? 200 : cloudResponse.status,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+        
+      } catch (error) {
+        console.error('[VM Proxy] Error:', error);
+        return new Response(JSON.stringify({ 
+          error: 'AI service temporarily unavailable',
+          details: error.message
+        }), {
+          status: 503,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      }
     }
 
     // HuggingFace endpoint - main chat endpoint used by frontend

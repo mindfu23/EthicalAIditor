@@ -6,11 +6,9 @@
  */
 
 const API_BASE = import.meta.env.VITE_CLOUDFLARE_WORKER_URL || '';
-// VM URL - disabled due to mixed content (HTTPS site can't call HTTP)
-// To enable: set up nginx + Let's Encrypt on VM, then uncomment
-// const VM_URL = 'http://34.30.2.20:8080';
-const VM_URL = null; // Disabled until HTTPS is configured
-// Primary: Cloud Run (has HTTPS)
+// Worker proxies to VM (Worker can call HTTP)
+const WORKER_HEALTH_URL = `${API_BASE}/api/health`;
+// Direct Cloud Run for fallback
 const CLOUD_RUN_URL = 'https://llm-api-1097587800570.us-central1.run.app';
 
 // Service status states
@@ -56,49 +54,27 @@ export function getStatus() {
 }
 
 /**
- * Ping the health endpoint to check/warm up the service
+ * Check service status - Worker will try VM first, then Cloud Run
  */
 export async function warmupService() {
   setStatus(ServiceStatus.CHECKING);
-  console.log('[Warmup] Checking Cloud Run service status...');
+  console.log('[Warmup] Checking service status...');
 
   try {
-    // VM is disabled (mixed content), go straight to Cloud Run
-    // When VM HTTPS is set up, uncomment the VM check below
-    /*
-    if (VM_URL) {
-      const healthResponse = await fetch(`${VM_URL}/health`, {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json' }
-      });
-
-      if (healthResponse.ok) {
-        const healthData = await healthResponse.json();
-        console.log('[Warmup] VM health:', healthData);
-
-        if (healthData.model_loaded) {
-          console.log('[Warmup] VM model loaded, service is ready');
-          setStatus(ServiceStatus.READY);
-          return true;
-        }
-      }
-    }
-    */
-    
-    // Check Cloud Run health
+    // Check Cloud Run health to see if model is loaded
     const healthResponse = await fetch(`${CLOUD_RUN_URL}/health`, {
       method: 'GET',
       headers: { 'Content-Type': 'application/json' }
     });
 
     if (!healthResponse.ok) {
-      console.error('[Warmup] Cloud Run health check failed');
+      console.error('[Warmup] Health check failed');
       setStatus(ServiceStatus.ERROR);
       return false;
     }
 
     const healthData = await healthResponse.json();
-    console.log('[Warmup] Cloud Run health:', healthData);
+    console.log('[Warmup] Health:', healthData);
 
     // If model is already loaded, we're ready!
     if (healthData.model_loaded) {
