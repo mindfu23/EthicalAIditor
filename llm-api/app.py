@@ -21,6 +21,11 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 
 # Model configuration
 MODEL_NAME = "PleIAs/Pleias-350m-Preview"
+# Use baked-in model cache if available, otherwise use default HF cache
+MODEL_CACHE_DIR = os.environ.get('MODEL_CACHE_DIR', None)
+# Set to "true" to load model at startup instead of first request (useful with min-instances=1)
+EAGER_LOAD = os.environ.get('EAGER_LOAD', 'false').lower() == 'true'
+
 model = None
 tokenizer = None
 
@@ -35,29 +40,42 @@ def load_model():
     """Load the model and tokenizer"""
     global model, tokenizer
     logger.info(f"Loading model: {MODEL_NAME}")
+    if MODEL_CACHE_DIR:
+        logger.info(f"Using baked-in cache: {MODEL_CACHE_DIR}")
+    
     try:
-        # Login to HuggingFace if token is available
+        # Login to HuggingFace if token is available (needed for private/gated models)
         hf_token = os.environ.get('HF_TOKEN') or os.environ.get('HUGGINGFACE_HUB_TOKEN')
         if hf_token:
             logger.info("Authenticating with HuggingFace...")
             login(token=hf_token)
         
-        # Load tokenizer
-        tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, token=hf_token)
+        # Load tokenizer (from cache if baked in, otherwise downloads)
+        tokenizer = AutoTokenizer.from_pretrained(
+            MODEL_NAME, 
+            token=hf_token,
+            cache_dir=MODEL_CACHE_DIR,
+            local_files_only=MODEL_CACHE_DIR is not None  # Don't download if using baked cache
+        )
         
         # Load model (CPU-only for cost efficiency)
         model = AutoModelForCausalLM.from_pretrained(
             MODEL_NAME,
             torch_dtype=torch.float32,
             low_cpu_mem_usage=True,
-            token=hf_token
+            token=hf_token,
+            cache_dir=MODEL_CACHE_DIR,
+            local_files_only=MODEL_CACHE_DIR is not None
         )
         logger.info("Model loaded successfully")
     except Exception as e:
         logger.error(f"Error loading model: {str(e)}")
         raise
 
-# Don't load model at startup - use lazy loading instead
+# Load model at startup if EAGER_LOAD is enabled (good for min-instances=1)
+if EAGER_LOAD:
+    logger.info("EAGER_LOAD enabled - loading model at startup...")
+    load_model()
 
 @app.route('/health', methods=['GET'])
 def health_check():

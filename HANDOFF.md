@@ -1,63 +1,93 @@
 # EthicalAIditor - Agent Handoff Document
 
-## Current Status (January 9, 2026)
+## Current Status (January 10, 2026)
 
 | Component | Status | URL |
 |-----------|--------|-----|
-| ⚠️ Cloud Run LLM API | Cold Start Issues | https://llm-api-1097587800570.us-central1.run.app |
+| 🔄 Cloud Run LLM API | Ready to Deploy | https://llm-api-1097587800570.us-central1.run.app |
 | ✅ Cloudflare Worker | Working | https://ethicalaiditor-api.valueape.workers.dev |
 | ✅ Netlify Frontend | Deployed | https://ethicalaiditor.netlify.app |
-| ⚠️ Chat Feature | Timeout on Cold Start | Needs testing after warmup |
+| 🔄 Baked Model | Ready to Build | Will reduce cold start by 30-40s |
 
 ## NEXT STEPS (Resume Here)
 
-### Immediate Action Required
-The Cloud Run service needs to be warmed up before testing. Run this command and wait up to 2 minutes:
-
+### Step 1: Set up HF_TOKEN in Secret Manager (one-time)
 ```bash
-curl -s -X POST https://llm-api-1097587800570.us-central1.run.app/chat \
-  -H "Content-Type: application/json" \
-  -d '{"messages":[{"role":"user","content":"hello"}]}' --max-time 180
+# Create the secret in Google Cloud Secret Manager
+echo -n "YOUR_HUGGINGFACE_TOKEN" | gcloud secrets create HF_TOKEN --data-file=-
+
+# Grant Cloud Build access to the secret
+gcloud secrets add-iam-policy-binding HF_TOKEN \
+  --member="serviceAccount:1097587800570@cloudbuild.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor"
 ```
 
-Once you get a response, test the app at https://ethicalaiditor.netlify.app
+### Step 2: Build and Deploy with Baked Model
+```bash
+cd /Users/jamesbeach/Documents/visual-studio-code/github-copilot/EthicalAIditor/llm-api
 
-### Root Cause
-- Cloud Run scales to zero when idle to save costs
-- Model loading takes 60-90 seconds on cold start
-- Cloudflare Worker has 30-second subrequest timeout limit
-- This caused "Internal server error" when warmup succeeded but chat failed
+# Build image with model baked in (~10-15 min first time)
+gcloud builds submit --config=cloudbuild.yaml
 
-### Recent Fix (needs testing)
-Changed architecture to bypass Cloudflare Worker timeout:
-1. **Frontend now calls Cloud Run directly** (no 30s timeout limit)
-2. **Added `/chat` endpoint to Cloud Run** (`llm-api/app.py`)
-3. **Added CORS support** (`flask-cors`) to Cloud Run
-4. **Updated warmup service** to ping Cloud Run directly
+# Deploy to Cloud Run
+gcloud run deploy llm-api \
+  --image gcr.io/ethicalaiditorv2/llm-api:latest \
+  --region us-central1 \
+  --platform managed \
+  --allow-unauthenticated
+```
 
-### Files Changed
-- `llm-api/app.py` - Added `/chat` endpoint and CORS
-- `llm-api/requirements.txt` - Added `flask-cors`
-- `src/services/huggingface.js` - Calls Cloud Run directly, falls back to worker
-- `src/services/warmup.js` - Pings Cloud Run directly
-
-### If Chat Still Fails After Warmup
-1. Check browser console for errors
-2. Verify CORS is working: `curl -I -X OPTIONS https://llm-api-1097587800570.us-central1.run.app/chat`
-3. Test Cloud Run directly: `curl -X POST https://llm-api-1097587800570.us-central1.run.app/chat -H "Content-Type: application/json" -d '{"messages":[{"role":"user","content":"test"}]}'`
-
-### Long-term Solutions (Optional)
-1. **Set Cloud Run min instances to 1** (~$15-25/month): `gcloud run services update llm-api --min-instances=1 --region=us-central1`
-2. **Use a scheduled ping** to keep service warm (free but less reliable)
+### Step 3: Test
+```bash
+# Wait for deploy, then test (should be 30-45s cold start now)
+curl -s -X POST https://llm-api-1097587800570.us-central1.run.app/chat \
+  -H "Content-Type: application/json" \
+  -d '{"messages":[{"role":"user","content":"hello"}]}' --max-time 120
+```
 
 ---
 
-## Latest Updates (January 9, 2026)
+## What Changed (January 10, 2026)
 
-### Warmup Feature Added
-- **src/services/warmup.js** - New service that pings the API on page load
-- **src/components/Editor.jsx** - Added status indicators showing:
-  - "Checking AI service..." (blue) - Initial check
+### Baked Model into Docker Image
+- **llm-api/Dockerfile** - Downloads model at build time
+- **llm-api/download_model.py** - Script to pre-download model
+- **llm-api/cloudbuild.yaml** - Passes HF_TOKEN from Secret Manager
+- **llm-api/app.py** - Uses baked model cache, supports EAGER_LOAD option
+
+### Expected Cold Start Times
+| Setup | Cold Start |
+|-------|------------|
+| Previous (download at runtime) | 60-90+ sec |
+| **New (baked model)** | **30-45 sec** |
+| With min-instances=1 | 0 sec (always warm) |
+
+---
+
+## Future: Enable min-instances=1 (No Cold Start)
+
+When you want to pay ~$15-25/month for instant responses:
+
+```bash
+# Enable always-on instance
+gcloud run services update llm-api \
+  --min-instances=1 \
+  --region=us-central1
+
+# Optional: Enable eager model loading (loads during container startup)
+gcloud run services update llm-api \
+  --set-env-vars="EAGER_LOAD=true" \
+  --region=us-central1
+```
+
+To revert back to scale-to-zero:
+```bash
+gcloud run services update llm-api --min-instances=0 --region=us-central1
+```
+
+---
+
+## Previous Status (January 9, 2026)
   - "AI Model Warming Up..." (amber) - Cold start in progress
   - "AI service is ready!" (green) - Ready to chat
   - "Service unavailable" (red) - Error with retry button
