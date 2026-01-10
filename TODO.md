@@ -202,16 +202,59 @@ npm run cap:open:android
 | Apple Developer Account | For App Store distribution | $99/year |
 | Physical iPhone | For testing (simulator works too) | — |
 
-**Critical: llama.cpp Native Plugin**
+### capacitor-llama-cpp Plugin (CREATED)
 
-The `@anthropic/capacitor-llama` plugin referenced in mobile-llm.js needs to be:
-1. Built from llama.cpp source for iOS/Android
-2. Or use an existing Capacitor llama.cpp wrapper
+A custom Capacitor plugin has been created at `plugins/capacitor-llama-cpp/` to wrap llama.cpp for iOS and Android.
 
-**Options:**
-- Build custom plugin using llama.cpp iOS/Android bindings
-- Use `capacitor-llama-cpp` if available
-- Fork and modify existing llama.cpp mobile implementations
+**Plugin Structure:**
+```
+plugins/capacitor-llama-cpp/
+├── package.json              # Plugin config
+├── CapacitorLlamaCpp.podspec # iOS CocoaPods spec
+├── src/
+│   ├── index.ts              # Plugin registration
+│   ├── definitions.ts        # TypeScript API interfaces
+│   └── web.ts                # Web fallback/mock
+├── ios/Plugin/
+│   ├── LlamaCppPlugin.swift  # iOS Capacitor plugin
+│   ├── LlamaContext.swift    # Swift wrapper for llama.cpp
+│   └── llama-bridging-header.h
+└── android/
+    ├── build.gradle          # Android build with NDK
+    └── src/main/
+        ├── java/.../LlamaCppPlugin.java  # Android plugin
+        └── cpp/
+            ├── CMakeLists.txt
+            └── llamacpp_jni.cpp  # JNI bindings
+```
+
+**Plugin API:**
+- `loadModel(options)` - Load a GGUF model from path
+- `unloadModel()` - Free model from memory  
+- `generate(options)` - Generate text with streaming callback
+- `getModelInfo()` - Get loaded model details
+- `stopGeneration()` - Cancel ongoing generation
+
+**Build Requirements:**
+
+*iOS:*
+1. Clone llama.cpp: `git clone https://github.com/ggerganov/llama.cpp`
+2. Build as xcframework:
+   ```bash
+   cd llama.cpp
+   mkdir build-ios && cd build-ios
+   cmake .. -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DLLAMA_METAL=ON
+   xcodebuild -scheme llama -configuration Release -sdk iphoneos
+   ```
+3. Add the resulting framework to the Xcode project
+
+*Android:*
+1. Clone llama.cpp into the plugin:
+   ```bash
+   cd plugins/capacitor-llama-cpp/android/src/main/cpp
+   git clone https://github.com/ggerganov/llama.cpp
+   ```
+2. The CMakeLists.txt will build it automatically with Android NDK
 
 ### Android Development Requirements
 
@@ -225,7 +268,8 @@ The `@anthropic/capacitor-llama` plugin referenced in mobile-llm.js needs to be:
 ### Remaining Mobile Tasks:
 
 **iOS:**
-- [ ] Install and configure llama.cpp Capacitor plugin
+- [ ] Clone and build llama.cpp as iOS xcframework (see above)
+- [ ] Add framework to Xcode project after `cap add ios`
 - [ ] Test model download on iOS Simulator
 - [ ] Test local inference on physical iPhone
 - [ ] Create app icons (1024x1024 for App Store)
@@ -233,7 +277,8 @@ The `@anthropic/capacitor-llama` plugin referenced in mobile-llm.js needs to be:
 - [ ] Submit for TestFlight beta testing
 
 **Android:**
-- [ ] Install and configure llama.cpp Capacitor plugin
+- [ ] Clone llama.cpp into `plugins/capacitor-llama-cpp/android/src/main/cpp/`
+- [ ] Run `npm run cap:add:android` to create Android project
 - [ ] Test model download on Android Emulator
 - [ ] Test local inference on physical Android device
 - [ ] Create app icons (512x512 for Play Store)
