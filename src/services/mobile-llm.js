@@ -1,16 +1,30 @@
 /**
  * Mobile LLM Service for EthicalAIditor
- * 
+ *
  * Handles local model inference on iOS and Android using llama.cpp
  * via Capacitor native plugins.
- * 
+ *
  * Architecture:
  * - iOS: Uses llama.cpp compiled as iOS framework (via capacitor-llama-cpp plugin)
  * - Android: Uses llama.cpp compiled as Android NDK library
  * - Both platforms store models in app's private documents directory
  */
 
-import { Capacitor } from '@capacitor/core';
+// Capacitor stub for web builds (actual module only available on native)
+let Capacitor = {
+  isNativePlatform: () => false,
+  getPlatform: () => 'web'
+};
+
+// Try to load real Capacitor if available (native builds)
+try {
+  // Check if we're in a native context before dynamic import
+  if (typeof window !== 'undefined' && window.Capacitor) {
+    Capacitor = window.Capacitor;
+  }
+} catch (e) {
+  // Use stub on web
+}
 
 // Platform detection
 export const Platform = {
@@ -27,11 +41,15 @@ export function getPlatform() {
   if (typeof window !== 'undefined' && window.electronAPI?.isElectron) {
     return Platform.ELECTRON;
   }
-  
-  if (Capacitor.isNativePlatform()) {
-    return Capacitor.getPlatform(); // 'ios' or 'android'
+
+  try {
+    if (Capacitor.isNativePlatform()) {
+      return Capacitor.getPlatform(); // 'ios' or 'android'
+    }
+  } catch (e) {
+    // Capacitor not available
   }
-  
+
   return Platform.WEB;
 }
 
