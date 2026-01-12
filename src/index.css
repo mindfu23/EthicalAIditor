@@ -1,3 +1,72 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* Ethical Aiditor Design System */
+:root {
+  /* Typography */
+  --font-size: 16px;
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+
+  /* Spacing & Radius */
+  --radius: 0.625rem;
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+
+  /* Ring for focus states */
+  --ring: #a8b5a8;
+}
+
+html {
+  font-size: var(--font-size);
+}
+
+@layer base {
+  * {
+    @apply border-warm-100;
+  }
+
+  body {
+    @apply bg-cream-50 text-ink;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Focus ring styling for accessibility */
+  :focus-visible {
+    @apply outline-none ring-2 ring-sage-light ring-offset-2;
+  }
+}
+
+/* Typography defaults */
+@layer base {
+  h1 {
+    @apply text-2xl font-medium leading-relaxed;
+  }
+
+  h2 {
+    @apply text-xl font-medium leading-relaxed;
+  }
+
+  h3 {
+    @apply text-lg font-medium leading-relaxed;
+  }
+
+  h4 {
+    @apply text-base font-medium leading-relaxed;
+  }
+
+  label {
+    @apply text-base font-medium leading-relaxed;
+  }
+
+  button {
+    @apply text-base font-medium leading-relaxed;
+  }
+
+  input, textarea {
+    @apply text-base font-normal leading-relaxed;
+  }
+}

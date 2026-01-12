@@ -137,8 +137,6 @@ export async function getSystemInfo() {
   
   return null;
 }
-  return await window.electronAPI.getSystemInfo();
-}
 
 /**
  * Get list of downloaded models (all platforms)

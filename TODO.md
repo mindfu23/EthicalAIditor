@@ -3,6 +3,7 @@
 - [ ] Implement user signup / subscription flow
 - [ ] Add "forgot password" loop
 - [ ] Integrate payment processing for subscriptions
+- [ ] Create test plans (unit tests for services, integration tests for API endpoints, E2E tests for critical user flows)
 
 ---
 
