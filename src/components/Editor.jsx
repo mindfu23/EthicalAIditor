@@ -9,6 +9,7 @@ import { parseFile, SUPPORTED_EXTENSIONS, getWordCount } from '../lib/file-parse
 import { Header } from './Header';
 import { EditorToolbar } from './EditorToolbar';
 import { ChatSidebar } from './ChatSidebar';
+import quillHandImage from '../assets/quill-hand.png';
 
 const API_BASE = import.meta.env.VITE_CLOUDFLARE_WORKER_URL || '';
 
@@ -377,14 +378,29 @@ export default function Editor() {
             </div>
           )}
 
-          {/* Manuscript Textarea */}
-          <textarea
-            value={manuscript}
-            onChange={(e) => setManuscript(e.target.value)}
-            onSelect={handleTextSelection}
-            className="flex-1 p-8 resize-none focus:outline-none font-serif text-lg leading-relaxed text-ink bg-cream-50"
-            placeholder="Paste your text here or upload a file (.txt, .md, .docx, .pdf)..."
-          />
+          {/* Manuscript Textarea with ghosted background */}
+          <div
+            className="flex-1 relative"
+            style={{
+              backgroundImage: `url(${quillHandImage})`,
+              backgroundRepeat: 'no-repeat',
+              backgroundPosition: 'center center',
+              backgroundSize: '40%',
+            }}
+          >
+            {/* Semi-transparent overlay to ghost the image */}
+            <div
+              className="absolute inset-0 bg-cream-50 pointer-events-none"
+              style={{ opacity: 0.92 }}
+            />
+            <textarea
+              value={manuscript}
+              onChange={(e) => setManuscript(e.target.value)}
+              onSelect={handleTextSelection}
+              className="absolute inset-0 w-full h-full p-8 resize-none focus:outline-none font-serif text-lg leading-relaxed text-ink bg-transparent z-10"
+              placeholder="Paste your text here or upload a file (.txt, .md, .docx, .pdf)..."
+            />
+          </div>
         </div>
 
         {/* Chat Sidebar */}
