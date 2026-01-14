@@ -1,0 +1,118 @@
+{
+  "$schema": "./approved-models.schema.json",
+  "version": "1.0.0",
+  "description": "Registry of approved AI models for EthicalAIditor - all models must be trained on legally licensed data",
+  "lastUpdated": "2025-01-14",
+  "models": [
+    {
+      "id": "PleIAs/Pleias-350m-Preview",
+      "name": "Pleias 350M",
+      "provider": "PleIAs",
+      "description": "Faster responses, lighter footprint. Trained on Common Corpus.",
+      "parameters": "350M",
+      "license": "Apache-2.0",
+      "trainingData": "Common Corpus (legally licensed public domain and permissively licensed text)",
+      "provenance": {
+        "organization": "PleIAs",
+        "website": "https://huggingface.co/PleIAs",
+        "trainingDataUrl": "https://huggingface.co/datasets/PleIAs/common_corpus",
+        "optOutPolicy": "Public domain and CC-licensed content; original authors can request removal",
+        "ethicalNotes": "Explicitly designed for ethical AI use cases with transparent data sourcing"
+      },
+      "capabilities": ["text-generation", "writing-assistance"],
+      "contextWindow": 2048,
+      "status": "active",
+      "tier": "free"
+    },
+    {
+      "id": "PleIAs/Pleias-1.2b-Preview",
+      "name": "Pleias 1.2B",
+      "provider": "PleIAs",
+      "description": "More nuanced writing suggestions. Trained on Common Corpus.",
+      "parameters": "1.2B",
+      "license": "Apache-2.0",
+      "trainingData": "Common Corpus (legally licensed public domain and permissively licensed text)",
+      "provenance": {
+        "organization": "PleIAs",
+        "website": "https://huggingface.co/PleIAs",
+        "trainingDataUrl": "https://huggingface.co/datasets/PleIAs/common_corpus",
+        "optOutPolicy": "Public domain and CC-licensed content; original authors can request removal",
+        "ethicalNotes": "Explicitly designed for ethical AI use cases with transparent data sourcing"
+      },
+      "capabilities": ["text-generation", "writing-assistance"],
+      "contextWindow": 2048,
+      "status": "active",
+      "tier": "free"
+    },
+    {
+      "id": "bigscience/bloomz-560m",
+      "name": "BLOOMZ 560M",
+      "provider": "Friendli.ai",
+      "description": "Multilingual instruction-following model. Part of BigScience open research.",
+      "parameters": "560M",
+      "license": "BigScience RAIL License v1.0",
+      "trainingData": "ROOTS corpus (multilingual, ethically sourced with consent)",
+      "provenance": {
+        "organization": "BigScience",
+        "website": "https://bigscience.huggingface.co/",
+        "trainingDataUrl": "https://huggingface.co/datasets/bigscience/roots",
+        "optOutPolicy": "Data sourcing followed ethical guidelines with opt-out mechanisms",
+        "ethicalNotes": "Open research project with diverse international collaboration and ethical oversight"
+      },
+      "capabilities": ["text-generation", "multilingual", "instruction-following"],
+      "contextWindow": 2048,
+      "status": "available",
+      "tier": "free",
+      "requiresApiKey": true,
+      "apiKeyType": "friendli"
+    },
+    {
+      "id": "bigscience/bloomz-1b7",
+      "name": "BLOOMZ 1.7B",
+      "provider": "Friendli.ai",
+      "description": "Larger multilingual instruction-following model.",
+      "parameters": "1.7B",
+      "license": "BigScience RAIL License v1.0",
+      "trainingData": "ROOTS corpus (multilingual, ethically sourced with consent)",
+      "provenance": {
+        "organization": "BigScience",
+        "website": "https://bigscience.huggingface.co/",
+        "trainingDataUrl": "https://huggingface.co/datasets/bigscience/roots",
+        "optOutPolicy": "Data sourcing followed ethical guidelines with opt-out mechanisms",
+        "ethicalNotes": "Open research project with diverse international collaboration and ethical oversight"
+      },
+      "capabilities": ["text-generation", "multilingual", "instruction-following"],
+      "contextWindow": 2048,
+      "status": "available",
+      "tier": "free",
+      "requiresApiKey": true,
+      "apiKeyType": "friendli"
+    }
+  ],
+  "rejectedModels": [
+    {
+      "id": "openai/*",
+      "reason": "Training data includes copyrighted material without explicit consent",
+      "source": "Multiple lawsuits and author complaints regarding unauthorized use of copyrighted books"
+    },
+    {
+      "id": "anthropic/*",
+      "reason": "Training data provenance not fully transparent; may include copyrighted material",
+      "source": "Lack of public documentation on training data consent processes"
+    }
+  ],
+  "evaluationCriteria": {
+    "required": [
+      "Training data must be legally licensed, public domain, or have explicit consent",
+      "Model license must permit commercial use",
+      "Clear documentation of data sources and provenance",
+      "Opt-out mechanism for data contributors"
+    ],
+    "preferred": [
+      "Open-source model weights",
+      "Transparent training process",
+      "Community governance or ethical oversight",
+      "Active maintenance and security updates"
+    ]
+  }
+}

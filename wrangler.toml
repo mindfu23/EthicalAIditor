@@ -11,11 +11,23 @@ binding = "DB"
 database_name = "ethicalaiditor-db"
 database_id = "0b5f486e-728d-4ba8-88d3-013feeefc064" # Run: wrangler d1 create ethicalaiditor-db
 
-# Environment variables (set via: wrangler secret put HUGGINGFACE_API_KEY)
+# Vectorize binding for RAG embeddings
+# Create with: wrangler vectorize create ethicalaiditor-vectors --dimensions=384 --metric=cosine
+[[vectorize]]
+binding = "VECTORIZE"
+index_name = "ethicalaiditor-vectors"
+
+# AI binding for embeddings generation
+[ai]
+binding = "AI"
+
+# Environment variables (set via: wrangler secret put <SECRET_NAME>)
 # HUGGINGFACE_API_KEY - Required for AI model inference
+# JWT_SECRET - Required for tenant session signing (generate with: openssl rand -base64 32)
 
 [vars]
 ENVIRONMENT = "production"
+# LLM_API_URL = "https://llm-api-1097587800570.us-central1.run.app"
 
 # Development settings
 [dev]

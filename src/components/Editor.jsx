@@ -4,7 +4,14 @@ import { getUsageStats, chatWithLLM, getEstimatedResponseTime } from '../service
 import { useAuth } from '../lib/auth';
 import { ModelSelector, useSelectedModel } from './ModelSelector';
 import { saveManuscript, loadManuscript, getAllManuscripts, deleteManuscript } from '../lib/storage/manuscript-store';
-import { initWarmup, subscribeToStatus, ServiceStatus } from '../services/warmup';
+import {
+  initWarmup,
+  subscribeToStatus,
+  ServiceStatus,
+  onFileUpload as triggerFileUploadWarmup,
+  onEditorActivity,
+  onModelChange
+} from '../services/warmup';
 import { parseFile, SUPPORTED_EXTENSIONS, getWordCount } from '../lib/file-parser';
 import { Header } from './Header';
 import { EditorToolbar } from './EditorToolbar';
@@ -127,25 +134,28 @@ export default function Editor() {
   const handleFileUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    
+
+    // Trigger predictive warmup when file is uploaded
+    triggerFileUploadWarmup(selectedModel);
+
     setParseError(null);
     setIsParsing(true);
-    
+
     try {
       const { text, type } = await parseFile(file);
       const wordCount = getWordCount(text);
-      
+
       setFileName(file.name);
       setManuscriptId(null); // New manuscript
       setManuscript(text);
-      
+
       // Add a system message about the upload
-      setMessages(prev => [...prev, { 
+      setMessages(prev => [...prev, {
         id: generateId(),
-        role: 'assistant', 
-        content: `File "${file.name}" uploaded (${wordCount.toLocaleString()} words, ${type} format). I can now see your manuscript and help you with it. What would you like to discuss?` 
+        role: 'assistant',
+        content: `File "${file.name}" uploaded (${wordCount.toLocaleString()} words, ${type} format). I can now see your manuscript and help you with it. What would you like to discuss?`
       }]);
-      
+
       // Refresh recent docs after a moment (after auto-save triggers)
       setTimeout(refreshRecentDocs, 3000);
     } catch (error) {
@@ -395,8 +405,13 @@ export default function Editor() {
             />
             <textarea
               value={manuscript}
-              onChange={(e) => setManuscript(e.target.value)}
+              onChange={(e) => {
+                setManuscript(e.target.value);
+                // Trigger predictive warmup on first typing
+                onEditorActivity(selectedModel);
+              }}
               onSelect={handleTextSelection}
+              onFocus={() => onEditorActivity(selectedModel)}
               className="absolute inset-0 w-full h-full p-8 resize-none focus:outline-none font-serif text-lg leading-relaxed text-ink bg-transparent z-10"
               placeholder="Paste your text here or upload a file (.txt, .md, .docx, .pdf)..."
             />
@@ -422,6 +437,7 @@ export default function Editor() {
             apiConfigured={apiConfigured}
             isAuthenticated={isAuthenticated}
             onOpenAuth={openAuth}
+            selectedModel={selectedModel}
           />
         )}
       </div>
@@ -442,7 +458,14 @@ export default function Editor() {
 
             {/* Model Selection */}
             <div className="mb-6">
-              <ModelSelector value={selectedModel} onChange={setSelectedModel} />
+              <ModelSelector
+                value={selectedModel}
+                onChange={(model) => {
+                  setSelectedModel(model);
+                  // Trigger warmup when model changes
+                  onModelChange(model);
+                }}
+              />
             </div>
 
             {/* API Key (fallback) */}

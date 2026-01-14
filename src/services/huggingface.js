@@ -133,19 +133,52 @@ function cleanResponse(text) {
 
 /**
  * Get auth headers from local storage
+ * Now prioritizes tenant token for rate limiting, falls back to user token
  */
 function getAuthHeaders() {
-  const token = localStorage.getItem('ethicalaiditor_auth_token');
-  const userId = localStorage.getItem('ethicalaiditor_user_id');
-  
   const headers = {
     'Content-Type': 'application/json',
   };
-  
+
+  // First, try tenant token (preferred for rate limiting)
+  const tenantData = localStorage.getItem('ethicalaiditor_tenant');
+  if (tenantData) {
+    try {
+      const parsed = JSON.parse(tenantData);
+      if (parsed.token) {
+        headers['Authorization'] = `Bearer ${parsed.token}`;
+        headers['X-Tenant-Id'] = parsed.tenant_id;
+        return headers;
+      }
+    } catch (e) {
+      // Ignore parse errors
+    }
+  }
+
+  // Fallback to user auth token
+  const token = localStorage.getItem('ethicalaiditor_auth_token');
+  const userId = localStorage.getItem('ethicalaiditor_user_id');
+
   if (token) headers['Authorization'] = `Bearer ${token}`;
   if (userId) headers['X-User-Id'] = userId;
-  
+
   return headers;
+}
+
+/**
+ * Get current tenant ID from storage
+ */
+function getTenantId() {
+  const tenantData = localStorage.getItem('ethicalaiditor_tenant');
+  if (tenantData) {
+    try {
+      const parsed = JSON.parse(tenantData);
+      return parsed.tenant_id;
+    } catch (e) {
+      return null;
+    }
+  }
+  return null;
 }
 
 /**
@@ -242,11 +275,17 @@ export const chatWithLLM = async (messages, manuscriptContext = '', model = null
 
   // Build prompt with truncated context to stay under token limits
   // Use 2000 chars for better context (about 500 tokens)
-  const contextPrefix = manuscriptContext 
+  const contextPrefix = manuscriptContext
     ? `Context from manuscript:\n---\n${manuscriptContext.substring(0, 2000)}\n---\n\n`
     : '';
   const userMessage = messages.map(m => `${m.role}: ${m.content}`).join('\n');
   const prompt = contextPrefix + userMessage;
+
+  // Get tenant ID for logging
+  const tenantId = getTenantId();
+  if (tenantId) {
+    console.log('[Chat] Using tenant:', tenantId);
+  }
 
   // Try Cloud Run first (HTTPS, longer timeout, handles cold starts)
   try {

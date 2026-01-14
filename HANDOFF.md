@@ -1,11 +1,11 @@
 # EthicalAIditor - Agent Handoff Document
 
-## Current Status (January 10, 2026)
+## Current Status (Updated: Implementation Complete)
 
 | Component | Status | URL |
 |-----------|--------|-----|
 | ✅ Cloud Run | Primary API | https://llm-api-1097587800570.us-central1.run.app |
-| ✅ Cloudflare Worker | Proxy/Fallback | https://ethicalaiditor-api.valueape.workers.dev |
+| ✅ Cloudflare Worker | API v3.0.0 | https://ethicalaiditor-api.valueape.workers.dev |
 | ✅ Netlify Frontend | Live | https://ethicalaiditor.netlify.app |
 | ✅ Netlify Function | VM Proxy | /.netlify/functions/vm-chat |
 | ⚠️ Compute Engine VM | HTTP only | http://34.30.2.20:8080 |
@@ -15,6 +15,79 @@
 - Size: ~700MB
 - Context window: ~2048 tokens
 - Response time: 4-18 seconds depending on output length
+
+---
+
+## Implementation Status (Phases 1-8)
+
+| Phase | Feature | Status | Files |
+|-------|---------|--------|-------|
+| ✅ 1 | Tenant Sessions | Complete | worker/index.js, src/services/session.js |
+| ✅ 2 | RAG Foundation | Complete | schema.sql, wrangler.toml, src/services/rag.js |
+| ✅ 3 | Style Assets API | Complete | worker/index.js, src/services/styles.js, StyleAssetsPanel.jsx |
+| ✅ 4 | Structured Edits | Complete | src/services/structured-edit.js, EditPreview.jsx |
+| ✅ 5 | Audit Jobs | Complete | worker/index.js, src/services/audit.js, AuditJobsPanel.jsx |
+| ✅ 6 | Progressive UX | Complete | SSE streaming in worker, audit.js |
+| ✅ 7 | Caching Layer | Complete | worker/index.js, src/services/cache.js |
+| ✅ 8 | LoRA Modes | Complete | WritingModeSelector.jsx |
+
+### New API Endpoints (v3.0.0)
+
+**RAG:**
+- `POST /api/rag/embed` - Embed document chunks for retrieval
+- `POST /api/rag/retrieve` - Semantic search for relevant chunks
+- `DELETE /api/rag/chunks` - Delete chunks for a manuscript
+
+**Styles:**
+- `GET /api/styles` - List style assets (filter by type)
+- `POST /api/styles` - Create/update style asset
+- `DELETE /api/styles/:id` - Delete style asset
+- `GET /api/styles/context` - Get active style context for prompts
+
+**Audit Jobs:**
+- `POST /api/audit/jobs` - Create audit job
+- `GET /api/audit/jobs` - List jobs
+- `GET /api/audit/jobs/:id` - Get job status
+- `GET /api/audit/jobs/:id/stream` - SSE stream for progress
+- `POST /api/audit/jobs/:id/cancel` - Cancel job
+
+**Cache:**
+- `POST /api/cache` - Get or set cache entry
+
+### Deployment Commands (Post-Implementation)
+
+```bash
+# 1. Create Vectorize index (one-time)
+npx wrangler vectorize create ethicalaiditor-vectors --dimensions=384 --metric=cosine
+
+# 2. Apply schema updates
+npx wrangler d1 execute ethicalaiditor-db --file=schema.sql --remote
+
+# 3. Deploy worker
+npx wrangler deploy
+
+# 4. Deploy frontend (auto via GitHub push)
+git add -A && git commit -m "Phase 2-8 implementation" && git push
+```
+
+### New Frontend Components
+
+| Component | Purpose |
+|-----------|---------|
+| `StyleAssetsPanel.jsx` | Manage style guides, glossaries, rules |
+| `EditPreview.jsx` | Diff visualization for structured edits |
+| `AuditJobsPanel.jsx` | Audit job management with SSE progress |
+| `WritingModeSelector.jsx` | LoRA mode selection (6 writing modes) |
+
+### New Services
+
+| Service | Purpose |
+|---------|---------|
+| `src/services/rag.js` | RAG embedding and retrieval |
+| `src/services/styles.js` | Style assets CRUD |
+| `src/services/audit.js` | Audit jobs with SSE streaming |
+| `src/services/cache.js` | Caching with TTL support |
+| `src/services/structured-edit.js` | Structured edit parsing and preview |
 
 ---
 

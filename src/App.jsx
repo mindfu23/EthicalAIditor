@@ -1,13 +1,16 @@
 import React from 'react';
 import { AuthProvider, AuthModal } from './lib/auth';
+import { TenantProvider } from './lib/tenant';
 import Editor from './components/Editor';
 
 function App() {
   return (
-    <AuthProvider>
-      <Editor />
-      <AuthModal />
-    </AuthProvider>
+    <TenantProvider>
+      <AuthProvider>
+        <Editor />
+        <AuthModal />
+      </AuthProvider>
+    </TenantProvider>
   );
 }
 
