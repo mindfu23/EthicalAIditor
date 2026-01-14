@@ -1,22 +1,34 @@
 /**
  * HuggingFace Service for EthicalAIditor
- * 
+ *
  * Calls Compute Engine VM directly for LLM requests (always-on, no cold start).
  * Falls back to Cloud Run or direct HuggingFace API if needed.
  * Supports PleIAs ethical AI models trained on Common Corpus.
- * 
+ * Supports BLOOM/BLOOMZ models via Friendli.ai.
+ *
  * Desktop (Electron): Can use local llama.cpp inference for instant, offline responses.
  * Mobile (iOS/Android): Can use local llama.cpp via Capacitor plugin for offline use.
  */
 
-import { 
-  isElectron, 
-  isMobile, 
-  generateLocal, 
+import {
+  isElectron,
+  isMobile,
+  generateLocal,
   isLocalInferenceAvailable as checkLocalAvailable,
   Platform,
   getPlatform
 } from './local-llm.js';
+
+import {
+  chatWithFriendli,
+  isFriendliModel,
+  isFriendliConfigured,
+  warmupFriendliEndpoint,
+  FRIENDLI_MODELS
+} from './friendli.js';
+
+// Re-export Friendli functions for components
+export { isFriendliConfigured, warmupFriendliEndpoint };
 
 const API_BASE = import.meta.env.VITE_CLOUDFLARE_WORKER_URL || '';
 // Netlify Function to proxy to VM (Netlify can call HTTP, unlike Cloudflare Workers)
@@ -156,12 +168,42 @@ export const chatWithLLM = async (messages, manuscriptContext = '', model = null
   // Check if using local inference (Electron desktop app or mobile)
   const inferenceMode = getInferenceMode();
   const localAvailable = checkLocalAvailable();
-  
+
   if (inferenceMode === InferenceMode.LOCAL && localAvailable) {
     return chatWithLocalLLM(messages, manuscriptContext, onProgress);
   }
-  
+
   const selectedModel = model || getSelectedModel();
+
+  // Check if this is a Friendli-hosted model (BLOOM/BLOOMZ)
+  if (isFriendliModel(selectedModel)) {
+    const startTime = Date.now();
+    let progressInterval = null;
+
+    if (onProgress) {
+      const estimated = 10000; // Friendli is fast, estimate 10s
+      progressInterval = setInterval(() => {
+        const elapsed = Date.now() - startTime;
+        onProgress(elapsed, estimated);
+      }, 500);
+    }
+
+    try {
+      const response = await chatWithFriendli(messages, selectedModel, manuscriptContext);
+      if (progressInterval) clearInterval(progressInterval);
+
+      // Track response time
+      const elapsed = Date.now() - startTime;
+      responseTimeHistory.push(elapsed);
+      if (responseTimeHistory.length > 5) responseTimeHistory.shift();
+      lastResponseTime = elapsed;
+
+      return cleanResponse(response);
+    } catch (error) {
+      if (progressInterval) clearInterval(progressInterval);
+      throw error;
+    }
+  }
   const startTime = Date.now();
   
   // Start progress tracking
@@ -427,4 +469,4 @@ async function chatWithLocalLLM(messages, manuscriptContext = '', onProgress = n
   }
 }
 
-export { DEFAULT_MODEL };
+export { DEFAULT_MODEL, FRIENDLI_MODELS };

@@ -162,11 +162,14 @@ def generate_text():
 
         # Tokenize input
         inputs = current_tokenizer(prompt, return_tensors="pt")
+        
+        # Ensure input_ids are Long type (fixes scalarType errors)
+        input_ids = inputs.input_ids.long()
 
         # Generate
         with torch.no_grad():
             outputs = current_model.generate(
-                inputs.input_ids,
+                input_ids,
                 max_length=max_length,
                 temperature=temperature,
                 do_sample=True,
@@ -226,11 +229,15 @@ def chat():
             max_length=400  # Leave room for generation
         )
         
+        # Ensure input_ids are Long type (fixes scalarType errors)
+        input_ids = inputs.input_ids.long()
+        attention_mask = inputs.attention_mask.long() if inputs.attention_mask is not None else None
+        
         # Generate using max_new_tokens (not max_length) to avoid input > output length errors
         with torch.no_grad():
             outputs = current_model.generate(
-                inputs.input_ids,
-                attention_mask=inputs.attention_mask,
+                input_ids,
+                attention_mask=attention_mask,
                 max_new_tokens=200,
                 temperature=0.7,
                 do_sample=True,

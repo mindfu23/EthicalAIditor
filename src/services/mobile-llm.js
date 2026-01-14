@@ -126,10 +126,11 @@ export async function initializeMobileLLM() {
   }
   
   try {
-    // Dynamic import of our local Capacitor llama.cpp plugin
+    // Dynamic import using variable to prevent Vite static analysis
     // This plugin wraps llama.cpp for iOS/Android
-    const { LlamaCpp } = await import('capacitor-llama-cpp');
-    llamaPlugin = LlamaCpp;
+    const pluginName = 'capacitor-llama-cpp';
+    const module = await import(/* @vite-ignore */ pluginName);
+    llamaPlugin = module.LlamaCpp;
     
     console.log('[Mobile LLM] Plugin initialized');
     return true;
@@ -148,7 +149,8 @@ export async function getMobileDeviceInfo() {
   }
   
   try {
-    const { Device } = await import('@capacitor/device');
+    const deviceModule = await import(/* @vite-ignore */ '@capacitor/device');
+    const Device = deviceModule.Device;
     const info = await Device.getInfo();
     const memInfo = await Device.getMemInfo?.() || {};
     
@@ -176,7 +178,8 @@ export async function getMobileModelsDirectory() {
   }
   
   try {
-    const { Filesystem, Directory } = await import('@capacitor/filesystem');
+    const fsModule = await import(/* @vite-ignore */ '@capacitor/filesystem');
+    const { Filesystem, Directory } = fsModule;
     
     // Create models directory if it doesn't exist
     try {
@@ -210,7 +213,8 @@ export async function getMobileDownloadedModels() {
   }
   
   try {
-    const { Filesystem, Directory } = await import('@capacitor/filesystem');
+    const fsModule = await import(/* @vite-ignore */ '@capacitor/filesystem');
+    const { Filesystem, Directory } = fsModule;
     
     const result = await Filesystem.readdir({
       path: 'models',
@@ -255,8 +259,10 @@ export async function downloadMobileModel(modelId, onProgress) {
   }
   
   try {
-    const { Filesystem, Directory } = await import('@capacitor/filesystem');
-    const { Http } = await import('@capacitor-community/http');
+    const fsModule = await import(/* @vite-ignore */ '@capacitor/filesystem');
+    const { Filesystem, Directory } = fsModule;
+    const httpModule = await import(/* @vite-ignore */ '@capacitor-community/http');
+    const { Http } = httpModule;
     
     console.log(`[Mobile LLM] Downloading ${model.name}...`);
     
@@ -311,7 +317,8 @@ export async function deleteMobileModel(filename) {
   }
   
   try {
-    const { Filesystem, Directory } = await import('@capacitor/filesystem');
+    const fsModule = await import(/* @vite-ignore */ '@capacitor/filesystem');
+    const { Filesystem, Directory } = fsModule;
     
     await Filesystem.deleteFile({
       path: `models/${filename}`,
@@ -343,7 +350,8 @@ export async function loadMobileModel(modelPath) {
   }
   
   try {
-    const { Filesystem, Directory } = await import('@capacitor/filesystem');
+    const fsModule = await import(/* @vite-ignore */ '@capacitor/filesystem');
+    const { Filesystem, Directory } = fsModule;
     
     // Get full path to model file
     const fileInfo = await Filesystem.getUri({
@@ -455,7 +463,8 @@ export async function checkMobileStorage() {
   }
   
   try {
-    const { Filesystem } = await import('@capacitor/filesystem');
+    const fsModule = await import(/* @vite-ignore */ '@capacitor/filesystem');
+    const { Filesystem } = fsModule;
     
     // This may not be available on all platforms
     if (Filesystem.checkPermissions) {
