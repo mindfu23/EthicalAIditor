@@ -23,12 +23,14 @@ import {
   chatWithFriendli,
   isFriendliModel,
   isFriendliConfigured,
+  isFriendliAvailable,
+  checkServerFriendli,
   warmupFriendliEndpoint,
   FRIENDLI_MODELS
 } from './friendli.js';
 
 // Re-export Friendli functions for components
-export { isFriendliConfigured, warmupFriendliEndpoint };
+export { isFriendliConfigured, isFriendliAvailable, checkServerFriendli, warmupFriendliEndpoint };
 
 const API_BASE = import.meta.env.VITE_CLOUDFLARE_WORKER_URL || '';
 // Netlify Function to proxy to VM (Netlify can call HTTP, unlike Cloudflare Workers)

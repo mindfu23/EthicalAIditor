@@ -3,12 +3,12 @@
  *
  * Shows available ethical AI models from different providers:
  * - PleIAs (hosted on Google Cloud Run)
- * - BLOOM/BLOOMZ (via Friendli.ai)
+ * - BLOOM/BLOOMZ (via Friendli.ai - server-side or client-side)
  */
 
-import React, { useState } from 'react';
-import { Cpu, Lock, Sparkles, Loader2 } from 'lucide-react';
-import { isFriendliConfigured, warmupFriendliEndpoint } from '../services/huggingface.js';
+import React, { useState, useEffect } from 'react';
+import { Cpu, Lock, Sparkles, Loader2, Server } from 'lucide-react';
+import { isFriendliConfigured, warmupFriendliEndpoint, checkServerFriendli, isFriendliAvailable } from '../services/friendli.js';
 
 // PleIAs model (Google Cloud Run)
 const PLEIAS_MODEL = {
@@ -58,16 +58,39 @@ const STORAGE_KEY = 'ethicalaiditor_model';
 
 export function ModelSelector({ value, onChange }) {
   const selectedModel = value || DEFAULT_MODEL;
-  const friendliConfigured = isFriendliConfigured();
+  const [friendliAvailable, setFriendliAvailable] = useState(isFriendliConfigured()); // Start with sync check
+  const [serverSideFriendli, setServerSideFriendli] = useState(false);
+  const [checkingFriendli, setCheckingFriendli] = useState(true);
   const [warmupStatus, setWarmupStatus] = useState(null); // null, 'warming', 'ready', 'error'
+
+  // Check Friendli availability on mount (async server check)
+  useEffect(() => {
+    async function checkAvailability() {
+      setCheckingFriendli(true);
+      try {
+        // Check if server-side Friendli is configured
+        const serverStatus = await checkServerFriendli();
+        setServerSideFriendli(serverStatus.configured);
+        
+        // Check overall availability (server or client)
+        const available = await isFriendliAvailable();
+        setFriendliAvailable(available);
+      } catch (error) {
+        console.warn('[ModelSelector] Error checking Friendli:', error);
+      } finally {
+        setCheckingFriendli(false);
+      }
+    }
+    checkAvailability();
+  }, []);
 
   const handleSelect = async (modelId) => {
     const model = AVAILABLE_MODELS.find(m => m.id === modelId);
     if (!model?.available) return;
 
-    // Check if Friendli is configured for BLOOM models
-    if (model.provider === 'friendli' && !friendliConfigured) {
-      alert('Please configure your Friendli.ai API key in settings to use BLOOM models.');
+    // Check if Friendli is available for BLOOM models
+    if (model.provider === 'friendli' && !friendliAvailable) {
+      alert('Friendli.ai is not currently available. Please try again later or configure your API key in settings.');
       return;
     }
 
@@ -125,7 +148,14 @@ export function ModelSelector({ value, onChange }) {
           <p className="text-xs text-gray-600 mb-2 flex items-center gap-1">
             <Sparkles size={12} />
             BLOOM models via Friendli.ai
-            {!friendliConfigured && (
+            {checkingFriendli ? (
+              <Loader2 size={10} className="animate-spin ml-1" />
+            ) : serverSideFriendli ? (
+              <span className="text-green-600 ml-1 flex items-center gap-1">
+                <Server size={10} />
+                (server)
+              </span>
+            ) : !friendliAvailable && (
               <span className="text-orange-500 ml-1">(API key required)</span>
             )}
           </p>
@@ -156,7 +186,7 @@ export function ModelSelector({ value, onChange }) {
               isSelected={selectedModel === model.id}
               onSelect={handleSelect}
               badgeStyle={getBadgeStyle(model)}
-              disabled={!friendliConfigured}
+              disabled={checkingFriendli || !friendliAvailable}
             />
           ))}
         </div>

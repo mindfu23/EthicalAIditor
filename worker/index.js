@@ -716,6 +716,218 @@ export default {
     }
 
     // ============================================================
+    // FRIENDLI.AI PROXY - Server-side BLOOMZ inference
+    // Allows anonymous users to use BLOOMZ models via server-side API key
+    // ============================================================
+
+    // Check if Friendli is configured server-side
+    if (url.pathname === '/api/friendli/status' && request.method === 'GET') {
+      const friendliToken = env.FRIENDLI_API_KEY;
+      const friendliEndpoint = env.FRIENDLI_ENDPOINT_ID || 'depwcl4sjq52lzu';
+      
+      return new Response(JSON.stringify({
+        configured: !!friendliToken,
+        endpoint_id: friendliToken ? friendliEndpoint : null,
+        models: friendliToken ? [
+          { id: 'bigscience/bloomz-560m', name: 'BLOOMZ 560M', description: 'Fast, multilingual ethical model (BigScience)' },
+          { id: 'bigscience/bloomz-1b7', name: 'BLOOMZ 1.7B', description: 'More capable multilingual model (BigScience)' }
+        ] : []
+      }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    }
+
+    // Friendli chat endpoint - proxies to Friendli.ai with server-side API key
+    if (url.pathname === '/api/friendli/chat' && request.method === 'POST') {
+      const startTime = Date.now();
+      
+      try {
+        const friendliToken = env.FRIENDLI_API_KEY;
+        const friendliEndpoint = env.FRIENDLI_ENDPOINT_ID || 'depwcl4sjq52lzu';
+        
+        if (!friendliToken) {
+          return new Response(JSON.stringify({ 
+            error: 'Friendli.ai not configured on server',
+            hint: 'Server admin needs to set FRIENDLI_API_KEY secret'
+          }), {
+            status: 503,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
+
+        const body = await request.json();
+        const { messages = [], manuscriptContext = '', model = 'bigscience/bloomz-560m' } = body;
+
+        // Extract tenant for rate limiting (optional - allows anonymous)
+        let tenantId = null;
+        let quotaTier = 'anonymous';
+        const token = request.headers.get('Authorization')?.replace('Bearer ', '');
+        if (token) {
+          const tenant = await verifyJWT(token, JWT_SECRET);
+          if (tenant) {
+            tenantId = tenant.tenant_id;
+            quotaTier = tenant.quota_tier || 'anonymous';
+
+            // Check rate limit
+            const rateLimit = await checkTenantRateLimit(tenantId, quotaTier);
+            if (!rateLimit.allowed) {
+              return new Response(JSON.stringify({
+                error: 'Rate limit exceeded',
+                quota_tier: quotaTier,
+                quota_limit: rateLimit.limit,
+                remaining: 0,
+                hint: 'Sign up or upgrade to increase your quota'
+              }), {
+                status: 429,
+                headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+              });
+            }
+          }
+        }
+
+        // Get the latest user message
+        const lastUserMessage = messages.filter(m => m.role === 'user').pop()?.content || '';
+        
+        // Build prompt optimized for BLOOMZ instruction-following
+        let prompt = '';
+        if (manuscriptContext) {
+          const truncatedContext = manuscriptContext.substring(0, 1200);
+          prompt = `Context from manuscript:\n${truncatedContext}\n\nTask: ${lastUserMessage}\n\nResponse:`;
+        } else {
+          prompt = `Task: ${lastUserMessage}\n\nResponse:`;
+        }
+
+        console.log(`[Friendli] Calling ${model} for tenant ${tenantId || 'anonymous'}`);
+
+        // Call Friendli.ai dedicated endpoint
+        const friendliResponse = await fetch(`https://api.friendli.ai/dedicated/v1/completions`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${friendliToken}`,
+            'Content-Type': 'application/json',
+            'X-Friendli-Team': friendliEndpoint
+          },
+          body: JSON.stringify({
+            prompt,
+            model: model.replace('bigscience/', ''), // Friendli uses short model names
+            max_tokens: 300,
+            temperature: 0.7,
+            top_p: 0.9,
+            stop: ['\n\nTask:', '\n\nContext:', '---']
+          })
+        });
+
+        if (!friendliResponse.ok) {
+          const errorText = await friendliResponse.text();
+          console.error('[Friendli] API error:', errorText);
+          
+          // Check if endpoint is waking up (serverless)
+          if (friendliResponse.status === 503 || friendliResponse.status === 504) {
+            return new Response(JSON.stringify({
+              error: 'Friendli endpoint is waking up',
+              hint: 'Please wait 30-60 seconds and try again',
+              status: 'waking'
+            }), {
+              status: 503,
+              headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+            });
+          }
+          
+          return new Response(JSON.stringify({ 
+            error: 'Friendli API error',
+            details: errorText.substring(0, 200)
+          }), {
+            status: friendliResponse.status,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
+
+        const data = await friendliResponse.json();
+        const responseText = data.choices?.[0]?.text?.trim() || '';
+        const latency = Date.now() - startTime;
+
+        console.log(`[Friendli] Response received in ${latency}ms`);
+
+        // Log inference and increment usage if tenant authenticated
+        if (tenantId) {
+          const promptHash = await sha256(prompt);
+          await incrementTenantUsage(tenantId);
+          await logInference(tenantId, model, 'friendli_chat', promptHash, prompt.length, responseText.length, latency, true, null);
+        }
+
+        // Return in format frontend expects
+        return new Response(JSON.stringify({
+          message: responseText,
+          response: responseText,
+          generated_text: responseText,
+          model,
+          provider: 'friendli',
+          latency_ms: latency
+        }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+
+      } catch (error) {
+        console.error('[Friendli] Error:', error);
+        return new Response(JSON.stringify({ error: error.message }), {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      }
+    }
+
+    // Friendli warmup endpoint - wake up serverless endpoint
+    if (url.pathname === '/api/friendli/warmup' && request.method === 'POST') {
+      try {
+        const friendliToken = env.FRIENDLI_API_KEY;
+        const friendliEndpoint = env.FRIENDLI_ENDPOINT_ID || 'depwcl4sjq52lzu';
+        
+        if (!friendliToken) {
+          return new Response(JSON.stringify({ 
+            success: false, 
+            status: 'not_configured' 
+          }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
+
+        // Send minimal request to wake up endpoint
+        const response = await fetch(`https://api.friendli.ai/dedicated/v1/completions`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${friendliToken}`,
+            'Content-Type': 'application/json',
+            'X-Friendli-Team': friendliEndpoint
+          },
+          body: JSON.stringify({
+            prompt: 'Hello',
+            model: 'bloomz-560m',
+            max_tokens: 1
+          })
+        });
+
+        if (response.ok) {
+          return new Response(JSON.stringify({ success: true, status: 'ready' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        } else if (response.status === 503 || response.status === 504) {
+          return new Response(JSON.stringify({ success: false, status: 'waking' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        } else {
+          return new Response(JSON.stringify({ success: false, status: 'error' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
+      } catch (error) {
+        return new Response(JSON.stringify({ success: false, status: 'error', error: error.message }), {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      }
+    }
+
+    // ============================================================
     // PHASE 2: RAG FOUNDATION - Document Embedding & Retrieval
     // ============================================================
 
@@ -1900,6 +2112,11 @@ If no issues found, respond with: []`;
             'POST /api/huggingface': 'Chat with LLM (tenant-aware rate limiting)',
             'POST /api/generate': 'Generate text (legacy)',
             'POST /api/chat': 'Chat endpoint (legacy)'
+          },
+          friendli: {
+            'GET /api/friendli/status': 'Check if Friendli.ai is configured server-side',
+            'POST /api/friendli/chat': 'Chat with BLOOMZ models via server-side Friendli',
+            'POST /api/friendli/warmup': 'Wake up serverless Friendli endpoint'
           },
           rag: {
             'POST /api/rag/embed': 'Embed document chunks for RAG retrieval',

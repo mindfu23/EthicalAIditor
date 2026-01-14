@@ -24,6 +24,8 @@ binding = "AI"
 # Environment variables (set via: wrangler secret put <SECRET_NAME>)
 # HUGGINGFACE_API_KEY - Required for AI model inference
 # JWT_SECRET - Required for tenant session signing (generate with: openssl rand -base64 32)
+# FRIENDLI_API_KEY - Optional: Server-side Friendli.ai API key for BLOOMZ models (allows anonymous users)
+# FRIENDLI_ENDPOINT_ID - Optional: Friendli endpoint ID (default: depwcl4sjq52lzu)
 
 [vars]
 ENVIRONMENT = "production"
