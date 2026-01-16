@@ -61,7 +61,7 @@ export function ModelSelector({ value, onChange }) {
   const [friendliAvailable, setFriendliAvailable] = useState(isFriendliConfigured()); // Start with sync check
   const [serverSideFriendli, setServerSideFriendli] = useState(false);
   const [checkingFriendli, setCheckingFriendli] = useState(true);
-  const [warmupStatus, setWarmupStatus] = useState(null); // null, 'warming', 'ready', 'error'
+  const [warmupStatus, setWarmupStatus] = useState(null); // null, 'warming', 'waking', 'ready', 'error', 'not_configured'
 
   // Check Friendli availability on mount (async server check)
   useEffect(() => {
@@ -109,10 +109,16 @@ export function ModelSelector({ value, onChange }) {
         // Try again after 30 seconds
         setTimeout(async () => {
           const retry = await warmupFriendliEndpoint();
-          setWarmupStatus(retry.success ? 'ready' : 'error');
-          setTimeout(() => setWarmupStatus(null), 3000);
+          setWarmupStatus(retry.success ? 'ready' : retry.status === 'waking' ? 'waking' : 'error');
+          if (retry.status !== 'waking') {
+            setTimeout(() => setWarmupStatus(null), 3000);
+          }
         }, 30000);
+      } else if (result.status === 'not_configured') {
+        setWarmupStatus('not_configured');
+        setTimeout(() => setWarmupStatus(null), 5000);
       } else {
+        // For other errors, show warming status briefly then error
         setWarmupStatus('error');
         setTimeout(() => setWarmupStatus(null), 5000);
       }
@@ -163,19 +169,22 @@ export function ModelSelector({ value, onChange }) {
           {/* Warmup status indicator */}
           {warmupStatus && (
             <div className={`text-xs mb-2 p-2 rounded flex items-center gap-2 ${
-              warmupStatus === 'warming' || warmupStatus === 'waking' 
-                ? 'bg-yellow-50 text-yellow-700' 
-                : warmupStatus === 'ready' 
+              warmupStatus === 'warming' || warmupStatus === 'waking'
+                ? 'bg-yellow-50 text-yellow-700'
+                : warmupStatus === 'ready'
                   ? 'bg-green-50 text-green-700'
-                  : 'bg-red-50 text-red-700'
+                  : warmupStatus === 'not_configured'
+                    ? 'bg-orange-50 text-orange-700'
+                    : 'bg-red-50 text-red-700'
             }`}>
               {(warmupStatus === 'warming' || warmupStatus === 'waking') && (
                 <Loader2 size={12} className="animate-spin" />
               )}
-              {warmupStatus === 'warming' && 'Warming up endpoint...'}
+              {warmupStatus === 'warming' && 'Connecting to endpoint...'}
               {warmupStatus === 'waking' && 'Endpoint is waking up (~30s)...'}
               {warmupStatus === 'ready' && '✓ Endpoint is ready'}
-              {warmupStatus === 'error' && 'Endpoint unavailable'}
+              {warmupStatus === 'not_configured' && 'Server not configured - add API key below'}
+              {warmupStatus === 'error' && 'Could not reach endpoint - retrying...'}
             </div>
           )}
           

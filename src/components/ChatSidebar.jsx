@@ -125,14 +125,14 @@ export function ChatSidebar({
 
         {/* Service Error Indicator */}
         {serviceStatus === ServiceStatus.ERROR && !isWarming && (
-          <div className="rounded-lg p-3 text-sm flex items-center gap-3 bg-destructive/10 border border-destructive/30 text-destructive">
+          <div className="rounded-lg p-3 text-sm flex items-center gap-3 bg-yellow-50 border border-yellow-200 text-yellow-800">
             <AlertCircle size={16} className="flex-shrink-0" />
             <div>
-              <p className="font-medium">Service unavailable</p>
+              <p className="font-medium">Waking up AI service...</p>
               <p className="text-xs mt-0.5 opacity-80">
-                The AI service may be starting up.{' '}
+                The endpoint may be sleeping. This can take 30-60 seconds.{' '}
                 <button onClick={() => warmupService(selectedModel)} className="underline font-medium">
-                  Retry
+                  Retry now
                 </button>
               </p>
             </div>
