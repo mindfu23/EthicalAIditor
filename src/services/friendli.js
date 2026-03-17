@@ -21,18 +21,13 @@ const FRIENDLI_ENDPOINT_ID = import.meta.env.VITE_FRIENDLI_ENDPOINT_ID || 'depwc
 
 /**
  * Available BLOOM models on the Friendli endpoint
- * Since both models are served from a single endpoint, they use the same endpoint ID
+ * Currently only bloomz-1b7 is active on the endpoint
  */
 export const FRIENDLI_MODELS = {
-  'bigscience/bloomz-560m': {
-    id: 'bigscience/bloomz-560m',
-    name: 'BLOOMZ 560M',
-    description: 'Fast, lightweight ethical model (BigScience)',
-  },
   'bigscience/bloomz-1b7': {
     id: 'bigscience/bloomz-1b7',
     name: 'BLOOMZ 1.7B',
-    description: 'More capable ethical model (BigScience)',
+    description: 'Ethical multilingual model (BigScience)',
   },
 };
 

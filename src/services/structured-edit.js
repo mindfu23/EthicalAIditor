@@ -10,7 +10,6 @@ import { getStyleContext } from './styles.js';
 import { createCompletionCache } from './cache.js';
 
 const API_BASE = import.meta.env.VITE_CLOUDFLARE_WORKER_URL || '';
-const CLOUD_RUN_URL = 'https://llm-api-1097587800570.us-central1.run.app';
 
 // Cache for edit responses (shorter TTL as they're context-specific)
 const editCache = createCompletionCache(600); // 10 minutes
@@ -203,8 +202,8 @@ If no edits are needed, respond with: []`;
       return cached;
     }
 
-    // Call LLM for structured response
-    const response = await fetch(`${CLOUD_RUN_URL}/chat`, {
+    // Call LLM for structured response via Cloudflare Worker
+    const response = await fetch(`${API_BASE}/api/huggingface`, {
       method: 'POST',
       headers: getAuthHeaders(),
       body: JSON.stringify({

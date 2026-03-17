@@ -61,7 +61,7 @@
       },
       "capabilities": ["text-generation", "multilingual", "instruction-following"],
       "contextWindow": 2048,
-      "status": "available",
+      "status": "unavailable",
       "tier": "free",
       "requiresApiKey": true,
       "apiKeyType": "friendli"

@@ -23,17 +23,9 @@ const PLEIAS_MODEL = {
 // BLOOM models (via Friendli.ai)
 const BLOOM_MODELS = [
   {
-    id: 'bigscience/bloomz-560m',
-    name: 'BLOOMZ 560M',
-    description: 'Fast, multilingual ethical model (BigScience)',
-    badge: 'Friendli.ai',
-    available: true,
-    provider: 'friendli',
-  },
-  {
     id: 'bigscience/bloomz-1b7',
     name: 'BLOOMZ 1.7B',
-    description: 'More capable multilingual model (BigScience)',
+    description: 'Ethical multilingual model (BigScience)',
     badge: 'Friendli.ai',
     available: true,
     provider: 'friendli',

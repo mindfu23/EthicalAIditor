@@ -729,8 +729,7 @@ export default {
         configured: !!friendliToken,
         endpoint_id: friendliToken ? friendliEndpoint : null,
         models: friendliToken ? [
-          { id: 'bigscience/bloomz-560m', name: 'BLOOMZ 560M', description: 'Fast, multilingual ethical model (BigScience)' },
-          { id: 'bigscience/bloomz-1b7', name: 'BLOOMZ 1.7B', description: 'More capable multilingual model (BigScience)' }
+          { id: 'bigscience/bloomz-1b7', name: 'BLOOMZ 1.7B', description: 'Ethical multilingual model (BigScience)' }
         ] : []
       }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
@@ -756,7 +755,7 @@ export default {
         }
 
         const body = await request.json();
-        const { messages = [], manuscriptContext = '', model = 'bigscience/bloomz-560m' } = body;
+        const { messages = [], manuscriptContext = '', model = 'bigscience/bloomz-1b7' } = body;
 
         // Extract tenant for rate limiting (optional - allows anonymous)
         let tenantId = null;
@@ -901,7 +900,7 @@ export default {
           },
           body: JSON.stringify({
             prompt: 'Hello',
-            model: 'bloomz-560m',
+            model: 'bloomz-1b7',
             max_tokens: 1
           })
         });

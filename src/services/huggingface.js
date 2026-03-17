@@ -35,8 +35,6 @@ export { isFriendliConfigured, isFriendliAvailable, checkServerFriendli, warmupF
 const API_BASE = import.meta.env.VITE_CLOUDFLARE_WORKER_URL || '';
 // Netlify Function to proxy to VM (Netlify can call HTTP, unlike Cloudflare Workers)
 const NETLIFY_VM_ENDPOINT = '/.netlify/functions/vm-chat';
-// Direct Cloud Run (HTTPS, has cold start)
-const CLOUD_RUN_URL = 'https://llm-api-1097587800570.us-central1.run.app';
 const DEFAULT_MODEL = 'PleIAs/Pleias-1.2b-Preview';
 
 // Inference mode: 'cloud' (default) or 'local' (desktop/mobile only)
@@ -265,7 +263,7 @@ export const chatWithLLM = async (messages, manuscriptContext = '', model = null
   };
 
   // If no API configured, fall back to direct HuggingFace call (requires user's API key)
-  if (!API_BASE && !CLOUD_RUN_URL) {
+  if (!API_BASE) {
     const apiKey = localStorage.getItem('hf_api_key');
     if (!apiKey) {
       if (progressInterval) clearInterval(progressInterval);
@@ -289,12 +287,12 @@ export const chatWithLLM = async (messages, manuscriptContext = '', model = null
     console.log('[Chat] Using tenant:', tenantId);
   }
 
-  // Try Cloud Run first (HTTPS, longer timeout, handles cold starts)
+  // Try Cloudflare Worker first (routes to appropriate backend)
   try {
-    console.log('[Chat] Calling Cloud Run...');
-    const response = await fetch(`${CLOUD_RUN_URL}/chat`, {
+    console.log('[Chat] Calling Cloudflare Worker...');
+    const response = await fetch(`${API_BASE}/api/huggingface`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(),
       body: JSON.stringify({
         messages,
         model: selectedModel,
@@ -304,14 +302,21 @@ export const chatWithLLM = async (messages, manuscriptContext = '', model = null
 
     if (response.ok) {
       const result = await response.json();
-      console.log('[Chat] Cloud Run response received');
+      console.log('[Chat] Cloudflare Worker response received');
       return cleanupAndReturn(result.text || result.response || '');
     }
-    
+
+    if (response.status === 429) {
+      const err = await response.json().catch(() => ({}));
+      if (progressInterval) clearInterval(progressInterval);
+      throw new Error(`Rate limit exceeded. ${err.error || 'Please sign up for more requests or wait until tomorrow.'}`);
+    }
+
     const err = await response.json().catch(() => ({}));
-    console.error('[Chat] Cloud Run error:', err);
+    console.error('[Chat] Cloudflare Worker error:', err);
   } catch (error) {
-    console.error('[Chat] Cloud Run failed, trying Netlify Function:', error);
+    if (error.message?.includes('Rate limit')) throw error;
+    console.error('[Chat] Cloudflare Worker failed, trying Netlify Function:', error);
   }
 
   // Fallback: Try Netlify Function VM proxy (10s timeout on free tier)
@@ -339,38 +344,6 @@ export const chatWithLLM = async (messages, manuscriptContext = '', model = null
     console.error('[Chat] Netlify Function failed:', error);
   }
 
-  // Final fallback: Cloudflare Worker
-  if (API_BASE) {
-    try {
-      console.log('[Chat] Trying Cloudflare Worker fallback...');
-      const response = await fetch(`${API_BASE}/api/huggingface`, {
-        method: 'POST',
-        headers: getAuthHeaders(),
-        body: JSON.stringify({
-          messages,
-          model: selectedModel,
-          manuscriptContext: manuscriptContext?.substring(0, 2000),
-        }),
-      });
-
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({}));
-        if (response.status === 429) {
-          if (progressInterval) clearInterval(progressInterval);
-          throw new Error(`Rate limit exceeded. ${err.error || 'Please sign up for more requests or wait until tomorrow.'}`);
-        }
-        console.error('[Chat] Worker fallback error:', err);
-        if (progressInterval) clearInterval(progressInterval);
-        throw new Error(err.error || `API error: ${response.status}`);
-      }
-
-      const result = await response.json();
-      return cleanupAndReturn(result.text || '');
-    } catch (workerError) {
-      console.error('[Chat] Worker fallback also failed:', workerError);
-    }
-  }
-  
   // All fallbacks failed - clean up progress interval
   if (progressInterval) clearInterval(progressInterval);
   throw new Error('AI service temporarily unavailable. Please try again.');
