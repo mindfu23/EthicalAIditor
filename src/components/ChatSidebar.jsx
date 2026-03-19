@@ -56,12 +56,9 @@ export function ChatSidebar({
     onChatFocus(selectedModel);
   };
 
-  // Determine which provider is active based on selected model
-  const isFriendliModel = selectedModel && (
-    selectedModel.includes('bloomz') || selectedModel.includes('bigscience')
-  );
-  const activeProvider = isFriendliModel ? 'friendli' : 'cloudrun';
-  const providerProgress = warmupProgress?.[activeProvider];
+  // All models use HuggingFace Inference API now
+  const activeProvider = 'huggingface';
+  const providerProgress = warmupProgress?.huggingface || warmupProgress?.cloudrun;
   const isWarming = providerProgress?.status === ServiceStatus.WARMING_UP ||
                    providerProgress?.status === ServiceStatus.CHECKING;
 
@@ -89,7 +86,7 @@ export function ChatSidebar({
               <Zap size={16} className="flex-shrink-0 animate-pulse" />
               <div className="flex-1">
                 <p className="font-medium">
-                  {isFriendliModel ? 'Friendli.ai' : 'AI Model'} Warming Up...
+                  AI Model Loading...
                 </p>
                 <p className="text-xs mt-0.5 opacity-80">
                   {getWarmupMessage(activeProvider)}
@@ -128,9 +125,9 @@ export function ChatSidebar({
           <div className="rounded-lg p-3 text-sm flex items-center gap-3 bg-yellow-50 border border-yellow-200 text-yellow-800">
             <AlertCircle size={16} className="flex-shrink-0" />
             <div>
-              <p className="font-medium">Waking up AI service...</p>
+              <p className="font-medium">Connecting to AI service...</p>
               <p className="text-xs mt-0.5 opacity-80">
-                The endpoint may be sleeping. This can take 30-60 seconds.{' '}
+                The model may be loading. This can take ~20 seconds.{' '}
                 <button onClick={() => warmupService(selectedModel)} className="underline font-medium">
                   Retry now
                 </button>

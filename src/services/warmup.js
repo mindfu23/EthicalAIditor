@@ -1,13 +1,13 @@
 /**
  * Service Warmup Module
  *
- * Provides predictive warming for Cloud Run and Friendli.ai endpoints.
- * Triggers warmup on user activity (file upload, typing) to minimize
- * wait time when they send their first AI request.
+ * Simplified for HuggingFace Inference API (Pro plan).
+ * HF's shared inference keeps popular models warm, so heavy warmup logic
+ * is no longer needed. This module now just does a lightweight health check
+ * and notifies the UI of readiness.
  */
 
 const API_BASE = import.meta.env.VITE_CLOUDFLARE_WORKER_URL || '';
-const CLOUD_RUN_URL = 'https://llm-api-1097587800570.us-central1.run.app';
 
 // Service status states
 export const ServiceStatus = {
@@ -28,15 +28,9 @@ export const WarmupProgress = {
   COMPLETE: 100
 };
 
-// Store state for each provider
+// Store state for the HF provider
 const providerState = {
-  cloudrun: {
-    status: ServiceStatus.UNKNOWN,
-    progress: WarmupProgress.NOT_STARTED,
-    lastCheck: 0,
-    warmupStartTime: null,
-  },
-  friendli: {
+  huggingface: {
     status: ServiceStatus.UNKNOWN,
     progress: WarmupProgress.NOT_STARTED,
     lastCheck: 0,
@@ -48,18 +42,17 @@ const providerState = {
 let statusListeners = [];
 let progressListeners = [];
 
-// Debounce timers for predictive warming
+// Debounce timers
 let activityWarmupTimer = null;
 const WARMUP_DEBOUNCE_MS = 1000;
-const WARMUP_COOLDOWN_MS = 60000; // Don't re-warm within 1 minute
+const WARMUP_COOLDOWN_MS = 120000; // 2 minutes (HF stays warm longer)
 
 /**
  * Subscribe to status changes
  */
 export function subscribeToStatus(callback) {
   statusListeners.push(callback);
-  // Immediately notify of current status (use cloudrun as primary)
-  callback(providerState.cloudrun.status);
+  callback(providerState.huggingface.status);
 
   return () => {
     statusListeners = statusListeners.filter(cb => cb !== callback);
@@ -68,11 +61,9 @@ export function subscribeToStatus(callback) {
 
 /**
  * Subscribe to progress changes (for progress bar)
- * Callback receives: { provider, progress, status, estimatedTimeRemaining }
  */
 export function subscribeToProgress(callback) {
   progressListeners.push(callback);
-  // Immediately notify current state
   callback(getProgressState());
 
   return () => {
@@ -81,295 +72,99 @@ export function subscribeToProgress(callback) {
 }
 
 /**
- * Get current progress state for all providers
+ * Get current progress state
  */
 export function getProgressState() {
   return {
-    cloudrun: { ...providerState.cloudrun },
-    friendli: { ...providerState.friendli },
-    // Overall status (worst of the two if either is warming)
-    isWarming: providerState.cloudrun.status === ServiceStatus.WARMING_UP ||
-               providerState.friendli.status === ServiceStatus.WARMING_UP,
-    activeProvider: providerState.cloudrun.status === ServiceStatus.WARMING_UP ? 'cloudrun' :
-                   providerState.friendli.status === ServiceStatus.WARMING_UP ? 'friendli' : null,
+    huggingface: { ...providerState.huggingface },
+    // Legacy compat — components may check these
+    cloudrun: { ...providerState.huggingface },
+    isWarming: providerState.huggingface.status === ServiceStatus.WARMING_UP ||
+               providerState.huggingface.status === ServiceStatus.CHECKING,
+    activeProvider: providerState.huggingface.status === ServiceStatus.WARMING_UP ? 'huggingface' : null,
   };
 }
 
 /**
  * Update provider state and notify listeners
  */
-function updateProviderState(provider, updates) {
-  Object.assign(providerState[provider], updates);
-
-  // Notify status listeners (primary provider)
-  if (provider === 'cloudrun') {
-    statusListeners.forEach(cb => cb(providerState.cloudrun.status));
-  }
-
-  // Notify progress listeners
+function updateState(updates) {
+  Object.assign(providerState.huggingface, updates);
+  statusListeners.forEach(cb => cb(providerState.huggingface.status));
   progressListeners.forEach(cb => cb(getProgressState()));
 }
 
 /**
- * Get current status (legacy compatibility)
+ * Get current status
  */
 export function getStatus() {
-  return providerState.cloudrun.status;
+  return providerState.huggingface.status;
 }
 
 /**
- * Estimate remaining warmup time based on progress
- */
-function estimateTimeRemaining(provider) {
-  const state = providerState[provider];
-  if (!state.warmupStartTime) return 45000;
-
-  const elapsed = Date.now() - state.warmupStartTime;
-  const progress = state.progress;
-
-  // Estimate total time based on progress
-  if (progress <= WarmupProgress.HEALTH_CHECK) return 45000;
-  if (progress <= WarmupProgress.TRIGGERING_LOAD) return 40000;
-  if (progress <= WarmupProgress.MODEL_LOADING) return 30000;
-  if (progress <= WarmupProgress.ALMOST_READY) return 10000;
-
-  return Math.max(0, 45000 - elapsed);
-}
-
-/**
- * Warm up Cloud Run service
+ * Check HuggingFace Inference API availability via worker health endpoint
  */
 export async function warmupCloudRun() {
-  const state = providerState.cloudrun;
+  return warmupHuggingFace();
+}
+
+export async function warmupHuggingFace() {
+  const state = providerState.huggingface;
 
   // Skip if recently checked and ready
   if (state.status === ServiceStatus.READY &&
       Date.now() - state.lastCheck < WARMUP_COOLDOWN_MS) {
-    console.log('[Warmup] Cloud Run already warm, skipping');
     return true;
   }
 
-  // Skip if already warming
-  if (state.status === ServiceStatus.WARMING_UP) {
-    console.log('[Warmup] Cloud Run warmup already in progress');
+  // Skip if already checking
+  if (state.status === ServiceStatus.WARMING_UP || state.status === ServiceStatus.CHECKING) {
     return false;
   }
 
-  updateProviderState('cloudrun', {
+  if (!API_BASE) {
+    updateState({ status: ServiceStatus.READY, progress: WarmupProgress.COMPLETE });
+    return true;
+  }
+
+  updateState({
     status: ServiceStatus.CHECKING,
     progress: WarmupProgress.HEALTH_CHECK,
     warmupStartTime: Date.now(),
   });
 
-  console.log('[Warmup] Checking Cloud Run status...');
-
   try {
-    // Step 1: Health check
-    const healthResponse = await fetch(`${CLOUD_RUN_URL}/health`, {
-      method: 'GET',
-      headers: { 'Content-Type': 'application/json' }
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+
+    const response = await fetch(`${API_BASE}/api/health`, {
+      signal: controller.signal,
     });
+    clearTimeout(timeout);
 
-    if (!healthResponse.ok) {
-      console.error('[Warmup] Health check failed');
-      updateProviderState('cloudrun', {
-        status: ServiceStatus.ERROR,
-        progress: WarmupProgress.NOT_STARTED,
-      });
-      return false;
-    }
-
-    const healthData = await healthResponse.json();
-    console.log('[Warmup] Health:', healthData);
-
-    // If model is already loaded, we're ready!
-    if (healthData.model_loaded) {
-      console.log('[Warmup] Model already loaded, service is ready');
-      updateProviderState('cloudrun', {
-        status: ServiceStatus.READY,
-        progress: WarmupProgress.COMPLETE,
-        lastCheck: Date.now(),
-      });
-      return true;
-    }
-
-    // Step 2: Model not loaded, need to warm up
-    console.log('[Warmup] Model not loaded, triggering load...');
-    updateProviderState('cloudrun', {
-      status: ServiceStatus.WARMING_UP,
-      progress: WarmupProgress.TRIGGERING_LOAD,
-    });
-
-    // Send a minimal request to trigger model loading
-    const warmupStart = Date.now();
-
-    // Progress simulation while waiting
-    const progressInterval = setInterval(() => {
-      const elapsed = Date.now() - warmupStart;
-      let progress = WarmupProgress.TRIGGERING_LOAD;
-
-      if (elapsed > 5000) progress = WarmupProgress.MODEL_LOADING;
-      if (elapsed > 20000) progress = WarmupProgress.ALMOST_READY;
-
-      if (providerState.cloudrun.status === ServiceStatus.WARMING_UP) {
-        updateProviderState('cloudrun', { progress });
-      }
-    }, 2000);
-
-    try {
-      const llmResponse = await fetch(`${CLOUD_RUN_URL}/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          prompt: 'Hi',
-          max_length: 5,
-          temperature: 0.7
-        })
-      });
-
-      clearInterval(progressInterval);
-
-      const warmupTime = Date.now() - warmupStart;
-      console.log(`[Warmup] LLM response received in ${warmupTime}ms`);
-
-      if (llmResponse.ok) {
-        updateProviderState('cloudrun', {
+    if (response.ok) {
+      const data = await response.json();
+      if (data.huggingface?.ok) {
+        updateState({
           status: ServiceStatus.READY,
           progress: WarmupProgress.COMPLETE,
           lastCheck: Date.now(),
         });
         return true;
-      } else {
-        const responseText = await llmResponse.text();
-        console.error('[Warmup] LLM warmup failed:', responseText);
-
-        // If it's a timeout/503 error, service is still warming up
-        if (llmResponse.status === 503 || llmResponse.status === 504) {
-          // Keep trying in background
-          setTimeout(() => warmupCloudRun(), 10000);
-          return false;
-        }
-
-        updateProviderState('cloudrun', {
-          status: ServiceStatus.ERROR,
-          progress: WarmupProgress.NOT_STARTED,
-        });
-        return false;
       }
-    } catch (fetchError) {
-      clearInterval(progressInterval);
-      throw fetchError;
     }
-  } catch (error) {
-    console.error('[Warmup] Error during warmup:', error);
 
-    // Network errors might mean the service is still starting
-    if (error.message?.includes('fetch') || error.message?.includes('network')) {
-      updateProviderState('cloudrun', {
-        status: ServiceStatus.WARMING_UP,
-        progress: WarmupProgress.MODEL_LOADING,
-      });
-      // Retry after a delay
-      setTimeout(() => warmupCloudRun(), 15000);
-    } else {
-      updateProviderState('cloudrun', {
-        status: ServiceStatus.ERROR,
-        progress: WarmupProgress.NOT_STARTED,
-      });
-    }
-    return false;
-  }
-}
-
-/**
- * Warm up Friendli endpoint
- */
-export async function warmupFriendli() {
-  const state = providerState.friendli;
-
-  // Skip if recently checked and ready
-  if (state.status === ServiceStatus.READY &&
-      Date.now() - state.lastCheck < WARMUP_COOLDOWN_MS) {
-    console.log('[Warmup] Friendli already warm, skipping');
+    // Worker is reachable but HF might not be — still mark as ready
+    // (the actual HF call will handle model loading errors)
+    updateState({
+      status: ServiceStatus.READY,
+      progress: WarmupProgress.COMPLETE,
+      lastCheck: Date.now(),
+    });
     return true;
-  }
-
-  // Skip if already warming
-  if (state.status === ServiceStatus.WARMING_UP) {
-    console.log('[Warmup] Friendli warmup already in progress');
-    return false;
-  }
-
-  // Check if Friendli is configured
-  const token = import.meta.env.VITE_FRIENDLI_API_KEY || localStorage.getItem('friendli_api_key');
-  if (!token) {
-    console.log('[Warmup] Friendli not configured, skipping');
-    updateProviderState('friendli', {
-      status: ServiceStatus.UNKNOWN,
-      progress: WarmupProgress.NOT_STARTED,
-    });
-    return false;
-  }
-
-  updateProviderState('friendli', {
-    status: ServiceStatus.CHECKING,
-    progress: WarmupProgress.HEALTH_CHECK,
-    warmupStartTime: Date.now(),
-  });
-
-  console.log('[Warmup] Checking Friendli status...');
-
-  try {
-    const FRIENDLI_ENDPOINT_ID = import.meta.env.VITE_FRIENDLI_ENDPOINT_ID || 'depwcl4sjq52lzu';
-
-    updateProviderState('friendli', {
-      status: ServiceStatus.WARMING_UP,
-      progress: WarmupProgress.TRIGGERING_LOAD,
-    });
-
-    const response = await fetch('https://api.friendli.ai/dedicated/v1/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: FRIENDLI_ENDPOINT_ID,
-        prompt: 'Hi',
-        max_tokens: 1,
-      }),
-    });
-
-    if (response.ok) {
-      console.log('[Warmup] Friendli endpoint is ready');
-      updateProviderState('friendli', {
-        status: ServiceStatus.READY,
-        progress: WarmupProgress.COMPLETE,
-        lastCheck: Date.now(),
-      });
-      return true;
-    }
-
-    if (response.status === 503) {
-      console.log('[Warmup] Friendli endpoint is waking up...');
-      updateProviderState('friendli', {
-        status: ServiceStatus.WARMING_UP,
-        progress: WarmupProgress.MODEL_LOADING,
-      });
-      // Retry after delay
-      setTimeout(() => warmupFriendli(), 10000);
-      return false;
-    }
-
-    console.error('[Warmup] Friendli warmup failed:', response.status);
-    updateProviderState('friendli', {
-      status: ServiceStatus.ERROR,
-      progress: WarmupProgress.NOT_STARTED,
-    });
-    return false;
   } catch (error) {
-    console.error('[Warmup] Friendli error:', error);
-    updateProviderState('friendli', {
+    console.error('[Warmup] Health check error:', error);
+    updateState({
       status: ServiceStatus.ERROR,
       progress: WarmupProgress.NOT_STARTED,
     });
@@ -378,98 +173,66 @@ export async function warmupFriendli() {
 }
 
 /**
- * Warm up the appropriate service based on selected model
+ * Warm up the appropriate service
  */
 export async function warmupService(modelId = null) {
-  // Determine which provider to warm based on model
-  const isFriendliModel = modelId && (
-    modelId.includes('bloomz') || modelId.includes('bigscience')
-  );
-
-  if (isFriendliModel) {
-    return warmupFriendli();
-  } else {
-    return warmupCloudRun();
-  }
+  return warmupHuggingFace();
 }
 
 /**
- * Predictive warming triggered by user activity
- * Debounced to avoid excessive calls
+ * Predictive warming triggered by user activity (debounced)
  */
 export function triggerPredictiveWarmup(modelId = null) {
-  // Clear existing timer
   if (activityWarmupTimer) {
     clearTimeout(activityWarmupTimer);
   }
 
-  // Debounce the warmup call
   activityWarmupTimer = setTimeout(() => {
-    console.log('[Warmup] Predictive warmup triggered by user activity');
-    warmupService(modelId);
+    warmupHuggingFace();
   }, WARMUP_DEBOUNCE_MS);
 }
 
-/**
- * Trigger warmup on file upload
- */
 export function onFileUpload(modelId = null) {
-  console.log('[Warmup] File upload detected, triggering warmup');
   triggerPredictiveWarmup(modelId);
 }
 
-/**
- * Trigger warmup on editor activity (typing)
- */
 export function onEditorActivity(modelId = null) {
   triggerPredictiveWarmup(modelId);
 }
 
-/**
- * Trigger warmup on chat input focus
- */
 export function onChatFocus(modelId = null) {
-  console.log('[Warmup] Chat focused, triggering warmup');
   triggerPredictiveWarmup(modelId);
 }
 
-/**
- * Trigger warmup when model selection changes
- */
 export function onModelChange(modelId) {
-  console.log('[Warmup] Model changed to:', modelId);
-  // Immediate warmup for model changes (no debounce)
-  warmupService(modelId);
+  // No special warmup needed — all models go through same HF API
+  warmupHuggingFace();
 }
 
 /**
  * Initialize warmup on module load
- * Call this once when the app starts
  */
 export function initWarmup() {
-  // Small delay to let the UI render first
   setTimeout(() => {
-    warmupCloudRun();
+    warmupHuggingFace();
   }, 500);
 }
 
 /**
  * Get warmup status message for UI
  */
-export function getWarmupMessage(provider = 'cloudrun') {
-  const state = providerState[provider];
-  const providerName = provider === 'cloudrun' ? 'Cloud Run' : 'Friendli.ai';
+export function getWarmupMessage(provider = 'huggingface') {
+  const state = providerState.huggingface;
 
   switch (state.status) {
     case ServiceStatus.CHECKING:
-      return `Checking ${providerName} status...`;
+      return 'Checking HuggingFace API...';
     case ServiceStatus.WARMING_UP:
-      const timeRemaining = Math.ceil(estimateTimeRemaining(provider) / 1000);
-      return `${providerName} is warming up (~${timeRemaining}s remaining)...`;
+      return 'Model is loading on HuggingFace (~20s)...';
     case ServiceStatus.READY:
-      return `${providerName} is ready`;
+      return 'HuggingFace API is ready';
     case ServiceStatus.ERROR:
-      return `${providerName} is unavailable`;
+      return 'HuggingFace API is unavailable';
     default:
       return '';
   }

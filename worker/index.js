@@ -127,11 +127,10 @@ export default {
     // JWT secret from environment (set via: wrangler secret put JWT_SECRET)
     const JWT_SECRET = env.JWT_SECRET || 'ethicalaiditor-dev-secret-change-in-production';
 
-    // VM URL (try HTTPS with self-signed cert first)
-    const VM_URL = 'https://34.30.2.20';
-    const VM_URL_HTTP = 'http://34.30.2.20:8080';
-    // Cloud Run URL (HTTPS fallback)
-    const CLOUD_RUN_URL = env.LLM_API_URL || 'https://llm-api-1097587800570.us-central1.run.app';
+    // HuggingFace Inference API (Pro plan)
+    const HF_INFERENCE_URL = 'https://api-inference.huggingface.co/models';
+    const HF_API_KEY = env.HUGGINGFACE_API_KEY;
+    const DEFAULT_HF_MODEL = 'PleIAs/Pleias-1.2b-Preview';
 
     // Smart CORS - allow production and localhost for development
     const ALLOWED_ORIGINS = [
@@ -398,48 +397,30 @@ export default {
     // Debug endpoint - test VM connectivity
     if (url.pathname === '/api/debug/vm') {
       const results = {};
-      
-      // Test HTTP with timeout using AbortController
+
+      // Test HuggingFace Inference API
       const controller1 = new AbortController();
-      const timeout1 = setTimeout(() => controller1.abort(), 5000);
+      const timeout1 = setTimeout(() => controller1.abort(), 10000);
       try {
         const start1 = Date.now();
-        const r1 = await fetch('http://34.30.2.20:8080/health', { signal: controller1.signal });
+        const r1 = await fetch(`${HF_INFERENCE_URL}/${DEFAULT_HF_MODEL}`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${HF_API_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ inputs: 'Hello', parameters: { max_new_tokens: 1 } }),
+          signal: controller1.signal,
+        });
         clearTimeout(timeout1);
-        const text = await r1.text();
-        results.http_8080 = { ok: r1.ok, status: r1.status, time: Date.now() - start1, body: text.slice(0, 100) };
+        results.huggingface = { ok: r1.ok, status: r1.status, time: Date.now() - start1 };
       } catch (e) {
         clearTimeout(timeout1);
-        results.http_8080 = { error: e.message, name: e.name };
+        results.huggingface = { error: e.message, name: e.name };
       }
-      
-      // Test HTTPS to Cloud Run (known working)
-      const controller2 = new AbortController();
-      const timeout2 = setTimeout(() => controller2.abort(), 5000);
-      try {
-        const start2 = Date.now();
-        const r2 = await fetch(CLOUD_RUN_URL + '/health', { signal: controller2.signal });
-        clearTimeout(timeout2);
-        const text = await r2.text();
-        results.cloud_run = { ok: r2.ok, status: r2.status, time: Date.now() - start2, body: text.slice(0, 100) };
-      } catch (e) {
-        clearTimeout(timeout2);
-        results.cloud_run = { error: e.message, name: e.name };
-      }
-      
-      // Test external HTTP to verify HTTP works at all
-      const controller3 = new AbortController();
-      const timeout3 = setTimeout(() => controller3.abort(), 5000);
-      try {
-        const start3 = Date.now();
-        const r3 = await fetch('http://httpbin.org/get', { signal: controller3.signal });
-        clearTimeout(timeout3);
-        results.httpbin = { ok: r3.ok, status: r3.status, time: Date.now() - start3 };
-      } catch (e) {
-        clearTimeout(timeout3);
-        results.httpbin = { error: e.message, name: e.name };
-      }
-      
+
+      results.hf_api_key_configured = !!HF_API_KEY;
+
       return new Response(JSON.stringify(results, null, 2), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
@@ -449,10 +430,12 @@ export default {
     if (url.pathname === '/api/models' && request.method === 'GET') {
       return new Response(JSON.stringify({
         models: {
-          'PleIAs/Pleias-1.2b-Preview': { name: 'Pleias 1.2B', description: 'More nuanced writing suggestions' },
-          'PleIAs/Pleias-350m-Preview': { name: 'Pleias 350M', description: 'Faster responses, lighter footprint' },
+          'PleIAs/Pleias-1.2b-Preview': { name: 'Pleias 1.2B', description: 'Ethical AI — more nuanced writing suggestions' },
+          'PleIAs/Pleias-350m-Preview': { name: 'Pleias 350M', description: 'Ethical AI — faster responses' },
+          'bigscience/bloomz-1b7': { name: 'BLOOMZ 1.7B', description: 'Ethical multilingual model (BigScience)' },
         },
-        default: 'PleIAs/Pleias-350m-Preview'
+        default: 'PleIAs/Pleias-1.2b-Preview',
+        provider: 'huggingface-inference'
       }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
@@ -471,42 +454,9 @@ export default {
       });
     }
 
-    // VM proxy endpoint - since Workers can't reach IPs directly, just use Cloud Run
-    // (kept for backwards compatibility with frontend)
-    if (url.pathname === '/api/vm/chat' && request.method === 'POST') {
-      try {
-        const body = await request.json();
-        console.log('[VM Proxy] Using Cloud Run (VM blocked by Cloudflare IP restrictions)');
-        
-        const cloudResponse = await fetch(`${CLOUD_RUN_URL}/chat`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body)
-        });
-        
-        const data = await cloudResponse.json();
-        return new Response(JSON.stringify({
-          text: data.text || data.response || '',
-          source: 'cloud_run'
-        }), {
-          status: cloudResponse.ok ? 200 : cloudResponse.status,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        });
-        
-      } catch (error) {
-        console.error('[VM Proxy] Error:', error);
-        return new Response(JSON.stringify({ 
-          error: 'AI service temporarily unavailable',
-          details: error.message
-        }), {
-          status: 503,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        });
-      }
-    }
-
-    // HuggingFace endpoint - main chat endpoint used by frontend
-    // Now with tenant-based rate limiting and inference logging
+    // HuggingFace Inference API endpoint - main chat endpoint used by frontend
+    // Proxies to HuggingFace Inference API with server-side API key (Pro plan)
+    // Tenant-based rate limiting and inference logging
     if (url.pathname === '/api/huggingface' && request.method === 'POST') {
       const startTime = Date.now();
       let tenantId = null;
@@ -514,10 +464,7 @@ export default {
       let body;
 
       try {
-        // Parse body first (can only be read once)
-        console.log('[HuggingFace] Attempting to parse body, bodyUsed:', request.bodyUsed);
         body = await request.json();
-        console.log('[HuggingFace] Body parsed successfully');
 
         // Extract tenant from Authorization header
         const token = request.headers.get('Authorization')?.replace('Bearer ', '');
@@ -543,13 +490,22 @@ export default {
             }
           }
         }
-        const llmApiUrl = env.LLM_API_URL || 'https://llm-api-1097587800570.us-central1.run.app';
+
+        if (!HF_API_KEY) {
+          return new Response(JSON.stringify({
+            error: 'HuggingFace API key not configured on server',
+            hint: 'Server admin needs to set HUGGINGFACE_API_KEY secret via wrangler'
+          }), {
+            status: 503,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
 
         // Convert messages array to prompt string
         const messages = body.messages || [];
         const manuscriptContext = body.manuscriptContext || '';
-        const intent = body.intent || 'chat'; // Intent for logging (e.g., 'rewrite_clarity', 'answer_question')
-        const selectedModel = body.model || 'PleIAs/Pleias-350m-Preview';
+        const intent = body.intent || 'chat';
+        const selectedModel = body.model || DEFAULT_HF_MODEL;
 
         // Build system prompt
         let systemPrompt = 'You are an ethical AI writing assistant trained on legally licensed materials.';
@@ -565,78 +521,81 @@ export default {
         const fullPrompt = `${systemPrompt}\n\n${messagePrompt}`;
         const promptHash = await sha256(fullPrompt);
 
-        console.log('HuggingFace endpoint - proxying to Cloud Run');
+        console.log(`[HuggingFace] Calling ${selectedModel} via Inference API`);
         console.log('Prompt length:', fullPrompt.length, 'Tenant:', tenantId || 'anonymous');
 
         let llmResponse;
         try {
-          llmResponse = await fetch(`${llmApiUrl}/generate`, {
+          llmResponse = await fetch(`${HF_INFERENCE_URL}/${selectedModel}`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+              'Authorization': `Bearer ${HF_API_KEY}`,
+              'Content-Type': 'application/json',
+            },
             body: JSON.stringify({
-              prompt: fullPrompt,
-              max_length: 500,
-              temperature: 0.7
-            })
+              inputs: fullPrompt,
+              parameters: {
+                max_new_tokens: 500,
+                temperature: 0.7,
+                return_full_text: false,
+              },
+            }),
           });
         } catch (fetchError) {
-          console.error('Fetch error:', fetchError);
+          console.error('[HuggingFace] Fetch error:', fetchError);
           const latency = Date.now() - startTime;
 
-          // Log failed inference attempt
           if (tenantId) {
-            await logInference(tenantId, selectedModel, intent, promptHash, fullPrompt.length, 0, latency, false, 'Cloud Run timeout');
+            await logInference(tenantId, selectedModel, intent, promptHash, fullPrompt.length, 0, latency, false, 'HF API timeout');
           }
 
           return new Response(JSON.stringify({
-            error: 'The AI service is warming up. Please wait 30-60 seconds and try again.',
-            details: 'Cloud Run cold start timeout'
+            error: 'AI service temporarily unavailable. Please try again.',
+            details: 'HuggingFace Inference API timeout'
           }), {
             status: 503,
             headers: { ...corsHeaders, 'Content-Type': 'application/json' }
           });
         }
 
-        let data;
-        const llmResponseText = await llmResponse.text();
-        try {
-          data = JSON.parse(llmResponseText);
-        } catch (jsonError) {
-          console.error('JSON parse error:', jsonError);
-          console.error('Response text:', llmResponseText.substring(0, 200));
+        if (!llmResponse.ok) {
+          const errorText = await llmResponse.text();
+          console.error('[HuggingFace] API error:', llmResponse.status, errorText);
           const latency = Date.now() - startTime;
 
           if (tenantId) {
-            await logInference(tenantId, selectedModel, intent, promptHash, fullPrompt.length, 0, latency, false, 'Invalid JSON response');
+            await logInference(tenantId, selectedModel, intent, promptHash, fullPrompt.length, 0, latency, false, errorText.substring(0, 200));
+          }
+
+          // Model loading (HF returns 503 while model loads, typically 20-30s)
+          if (llmResponse.status === 503) {
+            return new Response(JSON.stringify({
+              error: 'Model is loading on HuggingFace. Please try again in ~20 seconds.',
+              details: 'Model loading',
+              status: 'loading'
+            }), {
+              status: 503,
+              headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+            });
           }
 
           return new Response(JSON.stringify({
-            error: 'Invalid response from AI service. It may be warming up.',
-            details: llmResponseText.substring(0, 100)
+            error: 'HuggingFace API error',
+            details: errorText.substring(0, 200)
           }), {
-            status: 502,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-          });
-        }
-
-        if (!llmResponse.ok) {
-          console.error('Cloud Run error:', data);
-          const latency = Date.now() - startTime;
-
-          if (tenantId) {
-            await logInference(tenantId, selectedModel, intent, promptHash, fullPrompt.length, 0, latency, false, data.error || 'LLM API error');
-          }
-
-          return new Response(JSON.stringify({ error: data.error || 'LLM API error' }), {
             status: llmResponse.status,
             headers: { ...corsHeaders, 'Content-Type': 'application/json' }
           });
         }
 
-        // Extract just the generated response (remove the original prompt if included)
-        let responseText = data.generated_text || '';
-        if (responseText.startsWith(fullPrompt)) {
-          responseText = responseText.substring(fullPrompt.length).trim();
+        const data = await llmResponse.json();
+
+        // HF Inference API returns an array: [{generated_text: "..."}]
+        let responseText = '';
+        if (Array.isArray(data)) {
+          responseText = data[0]?.generated_text || '';
+        } else {
+          responseText = data.generated_text || data[0]?.generated_text || '';
         }
 
         const latency = Date.now() - startTime;
@@ -647,17 +606,20 @@ export default {
           await logInference(tenantId, selectedModel, intent, promptHash, fullPrompt.length, responseText.length, latency, true, null);
         }
 
+        console.log(`[HuggingFace] Response received in ${latency}ms`);
+
         // Return in format frontend expects
         return new Response(JSON.stringify({
           text: responseText,
           model: selectedModel,
+          provider: 'huggingface-inference',
           tenant_id: tenantId,
           latency_ms: latency
         }), {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         });
       } catch (error) {
-        console.error('HuggingFace endpoint error:', error);
+        console.error('[HuggingFace] Endpoint error:', error);
         const latency = Date.now() - startTime;
 
         if (tenantId) {
@@ -666,7 +628,6 @@ export default {
 
         return new Response(JSON.stringify({
           error: error.message || 'Internal server error',
-          hint: 'If this persists, the AI service may be starting up. Please try again in 30 seconds.'
         }), {
           status: 500,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }
@@ -674,252 +635,51 @@ export default {
       }
     }
 
-    // Proxy to Cloud Run LLM API - generate endpoint (legacy/direct)
+    // Legacy generate/chat endpoint — now proxies to HF Inference API
     if ((url.pathname === '/api/generate' || url.pathname === '/api/chat') && request.method === 'POST') {
       try {
         const body = await request.json();
-        const llmApiUrl = env.LLM_API_URL || 'https://llm-api-1097587800570.us-central1.run.app';
-        
-        // Transform chat request to generate request if needed
-        const generateBody = {
-          prompt: body.prompt || body.message || body.content,
-          max_length: body.max_length || body.maxTokens || 200,
-          temperature: body.temperature || 0.7
-        };
-        
-        console.log('Proxying to:', `${llmApiUrl}/generate`, generateBody);
-        
-        const llmResponse = await fetch(`${llmApiUrl}/generate`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(generateBody)
-        });
-        
-        const data = await llmResponse.json();
-        
-        // Return in format frontend expects
-        return new Response(JSON.stringify({
-          ...data,
-          message: data.generated_text,
-          response: data.generated_text
-        }), {
-          status: llmResponse.status,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        });
-      } catch (error) {
-        console.error('Error:', error);
-        return new Response(JSON.stringify({ error: error.message }), {
-          status: 500,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        });
-      }
-    }
+        const prompt = body.prompt || body.message || body.content;
+        const model = body.model || DEFAULT_HF_MODEL;
 
-    // ============================================================
-    // FRIENDLI.AI PROXY - Server-side BLOOMZ inference
-    // Allows anonymous users to use BLOOMZ models via server-side API key
-    // ============================================================
-
-    // Check if Friendli is configured server-side
-    if (url.pathname === '/api/friendli/status' && request.method === 'GET') {
-      const friendliToken = env.FRIENDLI_API_KEY;
-      const friendliEndpoint = env.FRIENDLI_ENDPOINT_ID || 'depwcl4sjq52lzu';
-      
-      return new Response(JSON.stringify({
-        configured: !!friendliToken,
-        endpoint_id: friendliToken ? friendliEndpoint : null,
-        models: friendliToken ? [
-          { id: 'bigscience/bloomz-1b7', name: 'BLOOMZ 1.7B', description: 'Ethical multilingual model (BigScience)' }
-        ] : []
-      }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      });
-    }
-
-    // Friendli chat endpoint - proxies to Friendli.ai with server-side API key
-    if (url.pathname === '/api/friendli/chat' && request.method === 'POST') {
-      const startTime = Date.now();
-      
-      try {
-        const friendliToken = env.FRIENDLI_API_KEY;
-        const friendliEndpoint = env.FRIENDLI_ENDPOINT_ID || 'depwcl4sjq52lzu';
-        
-        if (!friendliToken) {
-          return new Response(JSON.stringify({ 
-            error: 'Friendli.ai not configured on server',
-            hint: 'Server admin needs to set FRIENDLI_API_KEY secret'
-          }), {
+        if (!HF_API_KEY) {
+          return new Response(JSON.stringify({ error: 'HuggingFace API key not configured' }), {
             status: 503,
             headers: { ...corsHeaders, 'Content-Type': 'application/json' }
           });
         }
 
-        const body = await request.json();
-        const { messages = [], manuscriptContext = '', model = 'bigscience/bloomz-1b7' } = body;
-
-        // Extract tenant for rate limiting (optional - allows anonymous)
-        let tenantId = null;
-        let quotaTier = 'anonymous';
-        const token = request.headers.get('Authorization')?.replace('Bearer ', '');
-        if (token) {
-          const tenant = await verifyJWT(token, JWT_SECRET);
-          if (tenant) {
-            tenantId = tenant.tenant_id;
-            quotaTier = tenant.quota_tier || 'anonymous';
-
-            // Check rate limit
-            const rateLimit = await checkTenantRateLimit(tenantId, quotaTier);
-            if (!rateLimit.allowed) {
-              return new Response(JSON.stringify({
-                error: 'Rate limit exceeded',
-                quota_tier: quotaTier,
-                quota_limit: rateLimit.limit,
-                remaining: 0,
-                hint: 'Sign up or upgrade to increase your quota'
-              }), {
-                status: 429,
-                headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-              });
-            }
-          }
-        }
-
-        // Get the latest user message
-        const lastUserMessage = messages.filter(m => m.role === 'user').pop()?.content || '';
-        
-        // Build prompt optimized for BLOOMZ instruction-following
-        let prompt = '';
-        if (manuscriptContext) {
-          const truncatedContext = manuscriptContext.substring(0, 1200);
-          prompt = `Context from manuscript:\n${truncatedContext}\n\nTask: ${lastUserMessage}\n\nResponse:`;
-        } else {
-          prompt = `Task: ${lastUserMessage}\n\nResponse:`;
-        }
-
-        console.log(`[Friendli] Calling ${model} for tenant ${tenantId || 'anonymous'}`);
-
-        // Call Friendli.ai dedicated endpoint
-        const friendliResponse = await fetch(`https://api.friendli.ai/dedicated/v1/completions`, {
+        const llmResponse = await fetch(`${HF_INFERENCE_URL}/${model}`, {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${friendliToken}`,
+            'Authorization': `Bearer ${HF_API_KEY}`,
             'Content-Type': 'application/json',
-            'X-Friendli-Team': friendliEndpoint
           },
           body: JSON.stringify({
-            prompt,
-            model: model.replace('bigscience/', ''), // Friendli uses short model names
-            max_tokens: 300,
-            temperature: 0.7,
-            top_p: 0.9,
-            stop: ['\n\nTask:', '\n\nContext:', '---']
-          })
+            inputs: prompt,
+            parameters: {
+              max_new_tokens: body.max_length || body.maxTokens || 200,
+              temperature: body.temperature || 0.7,
+              return_full_text: false,
+            },
+          }),
         });
 
-        if (!friendliResponse.ok) {
-          const errorText = await friendliResponse.text();
-          console.error('[Friendli] API error:', errorText);
-          
-          // Check if endpoint is waking up (serverless)
-          if (friendliResponse.status === 503 || friendliResponse.status === 504) {
-            return new Response(JSON.stringify({
-              error: 'Friendli endpoint is waking up',
-              hint: 'Please wait 30-60 seconds and try again',
-              status: 'waking'
-            }), {
-              status: 503,
-              headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-            });
-          }
-          
-          return new Response(JSON.stringify({ 
-            error: 'Friendli API error',
-            details: errorText.substring(0, 200)
-          }), {
-            status: friendliResponse.status,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-          });
-        }
+        const data = await llmResponse.json();
+        const generatedText = Array.isArray(data) ? (data[0]?.generated_text || '') : (data.generated_text || '');
 
-        const data = await friendliResponse.json();
-        const responseText = data.choices?.[0]?.text?.trim() || '';
-        const latency = Date.now() - startTime;
-
-        console.log(`[Friendli] Response received in ${latency}ms`);
-
-        // Log inference and increment usage if tenant authenticated
-        if (tenantId) {
-          const promptHash = await sha256(prompt);
-          await incrementTenantUsage(tenantId);
-          await logInference(tenantId, model, 'friendli_chat', promptHash, prompt.length, responseText.length, latency, true, null);
-        }
-
-        // Return in format frontend expects
         return new Response(JSON.stringify({
-          message: responseText,
-          response: responseText,
-          generated_text: responseText,
-          model,
-          provider: 'friendli',
-          latency_ms: latency
+          generated_text: generatedText,
+          text: generatedText,
+          message: generatedText,
+          response: generatedText,
         }), {
+          status: llmResponse.ok ? 200 : llmResponse.status,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         });
-
       } catch (error) {
-        console.error('[Friendli] Error:', error);
+        console.error('Error:', error);
         return new Response(JSON.stringify({ error: error.message }), {
-          status: 500,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        });
-      }
-    }
-
-    // Friendli warmup endpoint - wake up serverless endpoint
-    if (url.pathname === '/api/friendli/warmup' && request.method === 'POST') {
-      try {
-        const friendliToken = env.FRIENDLI_API_KEY;
-        const friendliEndpoint = env.FRIENDLI_ENDPOINT_ID || 'depwcl4sjq52lzu';
-        
-        if (!friendliToken) {
-          return new Response(JSON.stringify({ 
-            success: false, 
-            status: 'not_configured' 
-          }), {
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-          });
-        }
-
-        // Send minimal request to wake up endpoint
-        const response = await fetch(`https://api.friendli.ai/dedicated/v1/completions`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${friendliToken}`,
-            'Content-Type': 'application/json',
-            'X-Friendli-Team': friendliEndpoint
-          },
-          body: JSON.stringify({
-            prompt: 'Hello',
-            model: 'bloomz-1b7',
-            max_tokens: 1
-          })
-        });
-
-        if (response.ok) {
-          return new Response(JSON.stringify({ success: true, status: 'ready' }), {
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-          });
-        } else if (response.status === 503 || response.status === 504) {
-          return new Response(JSON.stringify({ success: false, status: 'waking' }), {
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-          });
-        } else {
-          return new Response(JSON.stringify({ success: false, status: 'error' }), {
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-          });
-        }
-      } catch (error) {
-        return new Response(JSON.stringify({ success: false, status: 'error', error: error.message }), {
           status: 500,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         });
@@ -1868,12 +1628,11 @@ export default {
 
         // Process chunks (simplified audit - just identify potential issues)
         const findings = [];
-        const CLOUD_RUN_URL = env.LLM_API_URL || 'https://llm-api-1097587800570.us-central1.run.app';
 
         for (const chunk of chunks) {
           try {
-            // Call LLM for audit
-            const auditPrompt = `Analyze the following text for ${job.job_type === 'grammar' ? 'grammar and spelling' : 
+            // Call LLM for audit via HuggingFace Inference API
+            const auditPrompt = `Analyze the following text for ${job.job_type === 'grammar' ? 'grammar and spelling' :
               job.job_type === 'style_check' ? 'style consistency' :
               job.job_type === 'consistency' ? 'internal consistency issues' :
               'writing quality'} issues.
@@ -1891,18 +1650,26 @@ Respond with a JSON array of issues found. Each issue should have:
 
 If no issues found, respond with: []`;
 
-            const response = await fetch(`${CLOUD_RUN_URL}/chat`, {
+            const auditModel = DEFAULT_HF_MODEL;
+            const response = await fetch(`${HF_INFERENCE_URL}/${auditModel}`, {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers: {
+                'Authorization': `Bearer ${HF_API_KEY}`,
+                'Content-Type': 'application/json',
+              },
               body: JSON.stringify({
-                messages: [{ role: 'user', content: auditPrompt }],
-                intent: job.job_type,
+                inputs: auditPrompt,
+                parameters: {
+                  max_new_tokens: 500,
+                  temperature: 0.3,
+                  return_full_text: false,
+                },
               }),
             });
 
             if (response.ok) {
               const data = await response.json();
-              const text = data.text || data.response || '';
+              const text = Array.isArray(data) ? (data[0]?.generated_text || '') : (data.generated_text || '');
               
               // Try to parse findings
               const jsonMatch = text.match(/\[[\s\S]*?\]/);
@@ -2108,14 +1875,9 @@ If no issues found, respond with: []`;
             'POST /api/session/link': 'Link tenant session to authenticated user'
           },
           inference: {
-            'POST /api/huggingface': 'Chat with LLM (tenant-aware rate limiting)',
+            'POST /api/huggingface': 'Chat with LLM via HuggingFace Inference API (tenant-aware rate limiting)',
             'POST /api/generate': 'Generate text (legacy)',
             'POST /api/chat': 'Chat endpoint (legacy)'
-          },
-          friendli: {
-            'GET /api/friendli/status': 'Check if Friendli.ai is configured server-side',
-            'POST /api/friendli/chat': 'Chat with BLOOMZ models via server-side Friendli',
-            'POST /api/friendli/warmup': 'Wake up serverless Friendli endpoint'
           },
           rag: {
             'POST /api/rag/embed': 'Embed document chunks for RAG retrieval',
