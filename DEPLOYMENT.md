@@ -2,6 +2,11 @@
 
 Complete guide to deploying EthicalAIditor on Netlify with Cloudflare Workers for API proxy.
 
+> **Reference:** [`pleias-deployment-guide.pdf`](pleias-deployment-guide.pdf) — supplementary
+> guide for deploying the PleIAs model (the LLM behind this app) on Google Cloud Run.
+> _Recovered on 2026-05-30 from a stray workspace-root git repo that was being retired, and
+> filed here with the rest of the deployment docs._
+
 ## Architecture Overview
 
 ```
