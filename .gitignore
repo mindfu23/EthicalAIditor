@@ -42,3 +42,6 @@ npm-debug.log*
 # Claude Code
 .claude/
 CLAUDE.md
+
+# Gradle caches
+.gradle/
